@@ -1,0 +1,109 @@
+name: Build and Release
+
+# Triggers on a version tag push (e.g. git tag v0.2.0 && git push --tags)
+# or via manual workflow dispatch from the Actions tab.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # Required to create GitHub Releases and upload assets.
+
+jobs:
+  build:
+    name: Build Windows executable
+    runs-on: windows-latest
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Python setup ────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      # ── Generate icon ───────────────────────────────────────────────────────
+      - name: Generate icon.ico
+        run: python scripts/create_icon.py
+
+      # ── Build ───────────────────────────────────────────────────────────────
+      - name: Build executable with PyInstaller
+        run: pyinstaller build.spec
+
+      # ── Rename artifact with version ─────────────────────────────────────────
+      - name: Rename artifact
+        shell: pwsh
+        run: |
+          $tag     = "${{ github.ref_name }}"   # e.g. v0.2.0
+          $version = $tag.TrimStart("v")         # e.g. 0.2.0
+          Rename-Item "dist\cc-notify.exe" "cc-notify-$version-windows-x64.exe"
+          echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # ── Checksum ─────────────────────────────────────────────────────────────
+      - name: Compute SHA-256 checksum
+        shell: pwsh
+        run: |
+          $file = "dist\cc-notify-${{ env.VERSION }}-windows-x64.exe"
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash
+          "cc-notify-${{ env.VERSION }}-windows-x64.exe  $hash" |
+            Out-File "dist\SHA256SUMS.txt" -Encoding UTF8
+          Write-Host "SHA256: $hash"
+
+      # ── Upload artifacts for inspection before release ─────────────────────
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-notify-${{ env.VERSION }}-windows-x64
+          path: |
+            dist/cc-notify-${{ env.VERSION }}-windows-x64.exe
+            dist/SHA256SUMS.txt
+
+      # ── Create GitHub Release ────────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "cc-notify ${{ github.ref_name }}"
+          body: |
+            ## Installation
+
+            1. Download **`cc-notify-${{ env.VERSION }}-windows-x64.exe`** below.
+            2. Run it — a purple bell icon appears in your system tray.
+            3. Configure Claude Code hooks (one command):
+
+            **Windows (Claude Code native):**
+            ```powershell
+            .\scripts\setup-hooks.ps1
+            ```
+
+            **WSL2 (Claude Code in WSL):**
+            ```bash
+            bash scripts/setup-hooks.sh
+            ```
+
+            > **SmartScreen warning?**  Click **"More info"** → **"Run anyway"**.
+            > This is expected for open-source apps without an EV code signing certificate.
+            > See [docs/distribution.md](https://github.com/${{ github.repository }}/blob/main/docs/distribution.md#code-signing) for details.
+
+            ## Checksums
+            See `SHA256SUMS.txt` attached below.
+
+            ## What's Changed
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for full notes.
+          files: |
+            dist/cc-notify-${{ env.VERSION }}-windows-x64.exe
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
