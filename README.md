@@ -174,26 +174,105 @@ You should see a "Task Complete" toast in the bottom-right corner.
 
 ## Building from Source
 
-Requires **Windows** with [uv](https://docs.astral.sh/uv/) installed.
+The app targets Windows exclusively (WinRT toast, Win32 tray). All build
+steps must run on the Windows side, regardless of where you edit the code.
+Two development setups are supported.
+
+---
+
+### Option A — Native Windows
+
+**One-time setup:**
 
 ```powershell
-# Install uv (once, if not already installed)
+# Install uv
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 git clone https://github.com/Decent-Cypher/ai-notification.git
 cd ai-notification
 
-uv sync                    # create .venv and install all runtime dependencies
-uv run python src/main.py  # run directly during development
+# Install runtime dependencies (does not install cc-notify as a package)
+uv sync --no-install-project
 ```
 
-### Build a standalone EXE
+**Run during development:**
 
 ```powershell
-uv sync --group dev                       # also installs PyInstaller
-uv run python scripts/create_icon.py     # generates assets/icon.ico
-uv run pyinstaller build.spec            # output: dist/cc-notify.exe
+uv run python src/main.py
 ```
+
+**Build the EXE:**
+
+```powershell
+uv sync --group dev --no-install-project  # also installs PyInstaller
+uv run python scripts/create_icon.py      # generates assets/icon.ico
+uv run pyinstaller build.spec             # output: dist/cc-notify.exe
+```
+
+---
+
+### Option B — WSL2 (editing code inside WSL2)
+
+Because `win11toast` and `pystray` are Windows-only packages, `uv sync`
+cannot run inside the WSL2 Linux environment. A helper script handles
+this by delegating the build to Windows PowerShell via WSL2 interop,
+so you never need to leave your WSL2 terminal.
+
+**One-time setup — install uv on the Windows side:**
+
+```bash
+# Run from your WSL2 terminal
+powershell.exe -ExecutionPolicy ByPass \
+  -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+**Clone and develop normally in WSL2:**
+
+```bash
+git clone https://github.com/Decent-Cypher/ai-notification.git
+cd ai-notification
+
+# Edit code with your WSL2 editor (VS Code, Neovim, etc.)
+# All git operations work as normal from WSL2.
+```
+
+**Build the EXE from WSL2 (run from the repo root):**
+
+```bash
+bash scripts/build-windows.sh
+```
+
+This script resolves the current directory to a Windows UNC path
+(`\\wsl$\<distro>\...`) and runs `uv sync`, icon generation, and
+`pyinstaller` inside a Windows PowerShell session. Output: `dist/cc-notify.exe`.
+
+**Build and immediately launch:**
+
+```bash
+bash scripts/build-windows.sh --launch
+```
+
+**Test the webhook from WSL2** (with the EXE running on Windows):
+
+```bash
+# Detect the Windows host IP automatically
+WIN_HOST=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)
+
+# "Task Complete" toast
+curl -s -X POST "http://${WIN_HOST}:9876/webhook" \
+  -H "Content-Type: application/json" \
+  -d '{"hook_event_name":"Stop","session_id":"test","cwd":"/home"}'
+
+# "Permission Required" toast (alarm sound)
+curl -s -X POST "http://${WIN_HOST}:9876/webhook" \
+  -H "Content-Type: application/json" \
+  -d '{"hook_event_name":"PermissionRequest","tool_name":"Bash","session_id":"test","cwd":"/home"}'
+
+# Health check
+curl -s "http://${WIN_HOST}:9876/health"
+```
+
+---
 
 ### Publish a release
 
@@ -212,29 +291,29 @@ See [.github/workflows/release.yml](.github/workflows/release.yml).
 ```
 cc-notify/
 ├── src/
-│   ├── main.py         # entry point — wires server + tray
-│   ├── server.py       # Flask webhook receiver
-│   ├── notifier.py     # win11toast wrapper
-│   ├── tray.py         # pystray system tray + "Setup Hooks" menu action
-│   ├── hooks_setup.py  # auto-detect + configure Windows/WSL2 Claude Code hooks
-│   └── config.py       # %APPDATA% config persistence
+│   ├── main.py          # entry point — wires server + tray
+│   ├── server.py        # Flask webhook receiver
+│   ├── notifier.py      # win11toast wrapper
+│   ├── tray.py          # pystray system tray + "Setup Hooks" menu action
+│   ├── hooks_setup.py   # auto-detect + configure Windows/WSL2 Claude Code hooks
+│   └── config.py        # %APPDATA% config persistence
 ├── scripts/
-│   ├── setup-hooks.ps1 # Windows: configure Claude Code hooks
-│   ├── setup-hooks.sh  # WSL2: configure Claude Code hooks
-│   └── create_icon.py  # generate assets/icon.ico via Pillow
+│   ├── setup-hooks.ps1  # Windows: configure Claude Code hooks
+│   ├── setup-hooks.sh   # WSL2: configure Claude Code hooks
+│   ├── build-windows.sh # WSL2: build the Windows EXE via PowerShell interop
+│   └── create_icon.py   # generate assets/icon.ico via Pillow
 ├── examples/
 │   ├── settings-snippet.json   # drop this into ~/.claude/settings.json
 │   └── config-example.json     # annotated cc-notify config template
 ├── docs/
-│   ├── requirements.md         # functional + non-functional requirements
-│   ├── claude-code-hooks.md    # full hooks event reference
+│   ├── requirements.md          # functional + non-functional requirements
+│   ├── claude-code-hooks.md     # full hooks event reference
 │   ├── windows-notifications.md # Windows toast capabilities + limits
-│   └── distribution.md         # build, release, and code-signing guide
+│   └── distribution.md          # build, release, and code-signing guide
 ├── .github/workflows/
-│   └── release.yml     # CI: build EXE and publish GitHub Release on tag
-├── build.spec          # PyInstaller configuration
-├── requirements.txt    # runtime Python dependencies
-└── pyproject.toml      # project metadata
+│   └── release.yml      # CI: build EXE and publish GitHub Release on tag
+├── build.spec           # PyInstaller configuration
+└── pyproject.toml       # project metadata + dependency declarations
 ```
 
 ---
