@@ -174,22 +174,25 @@ You should see a "Task Complete" toast in the bottom-right corner.
 
 ## Building from Source
 
-Requires **Windows** with Python 3.9+.
+Requires **Windows** with [uv](https://docs.astral.sh/uv/) installed.
 
 ```powershell
+# Install uv (once, if not already installed)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
 git clone https://github.com/Decent-Cypher/ai-notification.git
 cd ai-notification
 
-pip install -r requirements.txt
-python src/main.py        # run directly during development
+uv sync                    # create .venv and install all runtime dependencies
+uv run python src/main.py  # run directly during development
 ```
 
 ### Build a standalone EXE
 
 ```powershell
-pip install pyinstaller
-python scripts/create_icon.py    # generates assets/icon.ico
-pyinstaller build.spec           # output: dist/cc-notify.exe
+uv sync --group dev                       # also installs PyInstaller
+uv run python scripts/create_icon.py     # generates assets/icon.ico
+uv run pyinstaller build.spec            # output: dist/cc-notify.exe
 ```
 
 ### Publish a release
@@ -238,13 +241,16 @@ cc-notify/
 
 ## Dependencies
 
-| Package | Purpose |
-|---|---|
-| `win11toast` | WinRT-based Windows toast notifications |
-| `flask` | Lightweight webhook HTTP server |
-| `waitress` | Production WSGI server (replaces Flask dev server) |
-| `pystray` | System tray icon |
-| `pillow` | Icon image generation |
+All dependencies are declared in `pyproject.toml` and managed by [uv](https://docs.astral.sh/uv/).
+
+| Package | Group | Purpose |
+|---|---|---|
+| `win11toast` | runtime | WinRT-based Windows toast notifications |
+| `flask` | runtime | Lightweight webhook HTTP server |
+| `waitress` | runtime | Production WSGI server (replaces Flask dev server) |
+| `pystray` | runtime | System tray icon |
+| `pillow` | runtime | Icon image generation |
+| `pyinstaller` | dev | Packages the app into a standalone Windows EXE |
 
 ---
 
