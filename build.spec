@@ -1,12 +1,11 @@
 # PyInstaller build spec for cc-notify.
 # Produces a single-file Windows executable with no console window.
 #
-# Build locally:   pyinstaller build.spec
+# Build locally:   uv run pyinstaller build.spec
 # CI:              see .github/workflows/release.yml
 #
-# The icon file is auto-generated before the build by scripts/create_icon.py.
-
-block_cipher = None
+# The icon file is generated before the build by scripts/create_icon.py.
+# Note: block_cipher / cipher= were removed in PyInstaller 6 — do not add them back.
 
 a = Analysis(
     ["src/main.py"],
@@ -39,13 +38,10 @@ a = Analysis(
     runtime_hooks=[],
     # Trim the bundle — these are never used in a headless tray app.
     excludes=["tkinter", "matplotlib", "numpy", "scipy", "pandas", "pytest"],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
