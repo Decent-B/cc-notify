@@ -1,0 +1,13 @@
+{
+  "_comment": "Optional: place this file at %APPDATA%\\cc-notify\\config.json to customise behaviour.",
+
+  "port": 9876,
+
+  "sound_enabled": true,
+
+  "notify_on_stop": true,
+
+  "notify_on_permission": true,
+
+  "notify_on_idle": true
+}

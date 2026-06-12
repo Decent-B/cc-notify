@@ -1,0 +1,43 @@
+{
+  "_comment": "Add the 'hooks' block below to your ~/.claude/settings.json (or run scripts/setup-hooks.ps1 / scripts/setup-hooks.sh to do it automatically).",
+  "_comment_wsl2": "WSL2 users: replace 'localhost' with your Windows host IP — run: awk '/^nameserver/{print $2}' /etc/resolv.conf",
+
+  "hooks": {
+    "Notification": [
+      {
+        "_comment": "Fires for: permission_prompt, idle_prompt, auth_success, elicitation events",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:9876/webhook",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "_comment": "Fires once when Claude finishes generating a response",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:9876/webhook",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "_comment": "Fires when Claude Code would show a permission dialog; includes tool name and input",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:9876/webhook",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
