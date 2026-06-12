@@ -21,28 +21,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── Python setup ────────────────────────────────────────────────────────
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      # ── uv setup (manages both Python and the virtual environment) ──────────
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.11"
-          cache: pip
+          enable-cache: true
 
-      - name: Install runtime dependencies
-        run: pip install -r requirements.txt
-
-      - name: Install PyInstaller
-        run: pip install pyinstaller
+      - name: Install dependencies
+        run: uv sync --group dev
 
       # ── Generate icon ───────────────────────────────────────────────────────
       - name: Generate icon.ico
-        run: python scripts/create_icon.py
+        run: uv run python scripts/create_icon.py
 
       # ── Build ───────────────────────────────────────────────────────────────
       - name: Build executable with PyInstaller
-        run: pyinstaller build.spec
+        run: uv run pyinstaller build.spec
 
-      # ── Rename artifact with version ─────────────────────────────────────────
+      # ── Rename artifact with version ────────────────────────────────────────
       - name: Rename artifact
         shell: pwsh
         run: |
