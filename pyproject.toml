@@ -9,12 +9,19 @@ description = "Windows tray app that sends native notifications for Claude Code 
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
+# Runtime dependencies — must be available on the Windows machine or bundled by PyInstaller.
 dependencies = [
     "flask>=3.0",
     "waitress>=3.0",
     "win11toast>=0.36",
     "pystray>=0.19",
     "pillow>=10.0",
+]
+
+# Build-time only; not bundled into the EXE.
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.0",
 ]
 
 [project.urls]

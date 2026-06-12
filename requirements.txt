@@ -1,6 +1,0 @@
-# Runtime dependencies — must install on Windows for the app to function.
-flask>=3.0
-waitress>=3.0
-win11toast>=0.36
-pystray>=0.19
-pillow>=10.0
