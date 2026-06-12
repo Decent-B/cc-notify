@@ -19,17 +19,19 @@ jobs:
     steps:
       # ── Checkout ────────────────────────────────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # ── uv setup (manages both Python and the virtual environment) ──────────
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8
         with:
           python-version: "3.11"
           enable-cache: true
 
+      # --no-install-project: cc-notify is a PyInstaller app, not a pip package.
+      # Install only the declared dependencies; never try to build the project itself.
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --no-install-project
 
       # ── Generate icon ───────────────────────────────────────────────────────
       - name: Generate icon.ico
@@ -60,7 +62,7 @@ jobs:
 
       # ── Upload artifacts for inspection before release ─────────────────────
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cc-notify-${{ env.VERSION }}-windows-x64
           path: |
@@ -69,7 +71,7 @@ jobs:
 
       # ── Create GitHub Release ────────────────────────────────────────────────
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: "cc-notify ${{ github.ref_name }}"
           body: |
