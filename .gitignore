@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+*.spec.bak
+
+# PyInstaller build artefacts (everything except build.spec)
+dist/
+build/
+*.manifest
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Generated icon (rebuilt by CI from scripts/create_icon.py)
+assets/icon.ico
+
+# IDE
+.vscode/
+.idea/
+*.suo
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
