@@ -131,30 +131,35 @@ WIN_PATH=$(wslpath -w "$REPO_ROOT")
 WIN_HOST="${CC_NOTIFY_HOST:-localhost}"
 BASE_URL="http://${WIN_HOST}:9876"
 
-# ── Read the per-install webhook token from cc-notify's Windows state file ─────
+# ── Webhook token helpers ─────────────────────────────────────────────────────
 # The token is stored in %APPDATA%\cc-notify\state.json and must be included
 # as ?token=<value> in every POST to /webhook.
+#
+# STATE_FILE is computed once (the path is stable regardless of whether the
+# file exists yet).  _read_webhook_token() is called both here and again after
+# the health check, because steps 1–2 launch cc-notify.exe which generates the
+# token on startup — so the file may not exist until step 3 completes.
 
 APPDATA_WIN="$(powershell.exe -NoProfile -Command 'Write-Output $env:APPDATA' \
   2>/dev/null | tr -d '\r\n')" || true
 STATE_FILE="$(wslpath "${APPDATA_WIN}/cc-notify/state.json" 2>/dev/null)" || true
-TOKEN=""
-if [[ -f "${STATE_FILE:-}" ]]; then
-  TOKEN="$(python3 -c "
+
+_read_webhook_token() {
+  # Reads webhook_token from STATE_FILE; outputs empty string on any failure.
+  [[ -f "${STATE_FILE:-}" ]] || return 0
+  python3 - "$STATE_FILE" 2>/dev/null <<'PYEOF' || true
 import json, sys
 try:
-    d = json.load(open('$STATE_FILE', encoding='utf-8'))
+    d = json.load(open(sys.argv[1], encoding='utf-8'))
     print(d.get('webhook_token', ''), end='')
 except Exception:
     pass
-" 2>/dev/null)" || true
-fi
+PYEOF
+}
 
-if [[ -z "$TOKEN" ]]; then
-  echo "WARNING: Could not read webhook token from state.json."
-  echo "  Webhook tests will fail (server requires a valid token)."
-  echo "  Launch cc-notify.exe once to generate the token, then re-run."
-fi
+# Attempt an early read — succeeds on re-runs where cc-notify is already up.
+# May be empty on a first-ever run (no state.json yet); re-read after step 3.
+TOKEN="$(_read_webhook_token)"
 
 PASS=0
 FAIL=0
@@ -240,6 +245,11 @@ if [[ $FROM_STEP -le 3 ]]; then
   fi
 
   ok "$(curl -s "${BASE_URL}/health")"
+
+  # cc-notify writes state.json (including the webhook token) on startup.
+  # Now that the server is confirmed ready, re-read the token — this handles
+  # the first-ever launch where state.json did not exist at script start.
+  TOKEN="$(_read_webhook_token)"
 fi
 
 # ── Step 4: Webhook tests ─────────────────────────────────────────────────────
@@ -247,14 +257,25 @@ fi
 if [[ $FROM_STEP -le 4 ]]; then
   section "4/5  Webhooks  (watch for toasts on screen)"
 
-  webhook_test "Stop          → Task Complete toast" \
-    '{"hook_event_name":"Stop","session_id":"test","cwd":"/home"}'
+  # Token must exist by this point.  If it's still empty it means cc-notify
+  # was never launched (e.g. --from-step 4 on a machine with no state.json).
+  if [[ -z "$TOKEN" ]]; then
+    fail "Webhook token not found — skipping webhook tests"
+    echo ""
+    echo "  cc-notify.exe must run at least once to generate the token."
+    echo "  Re-run without --from-step (or with --from-step 2) so steps"
+    echo "  2–3 launch the EXE and populate state.json."
+  else
 
-  webhook_test "PermissionRequest → Permission Required toast (alarm)" \
-    '{"hook_event_name":"PermissionRequest","tool_name":"Bash","session_id":"test","cwd":"/home"}'
+    webhook_test "Stop          → Task Complete toast" \
+      '{"hook_event_name":"Stop","session_id":"test","cwd":"/home"}'
 
-  webhook_test "Notification/idle_prompt → Waiting for Input toast" \
-    '{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Waiting for your reply.","session_id":"test","cwd":"/home"}'
+    webhook_test "PermissionRequest → Permission Required toast (alarm)" \
+      '{"hook_event_name":"PermissionRequest","tool_name":"Bash","session_id":"test","cwd":"/home"}'
+
+    webhook_test "Notification/idle_prompt → Waiting for Input toast" \
+      '{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Waiting for your reply.","session_id":"test","cwd":"/home"}'
+  fi
 fi
 
 # ── Step 5: Git status ────────────────────────────────────────────────────────
