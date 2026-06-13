@@ -7,11 +7,17 @@
 # The icon file is generated before the build by scripts/create_icon.py.
 # Note: block_cipher / cipher= were removed in PyInstaller 6 — do not add them back.
 
+# collect_data_files gathers non-Python resource files from an installed package.
+# certifi's cacert.pem must be collected this way — listing "certifi" in
+# hiddenimports only includes the Python code, not the certificate bundle file
+# that certifi.where() points to at runtime.
+from PyInstaller.utils.hooks import collect_data_files
+
 a = Analysis(
     ["src/main.py"],
     pathex=["src"],
     binaries=[],
-    datas=[],
+    datas=collect_data_files("certifi"),
     hiddenimports=[
         # win11toast pulls in winsdk WinRT bindings dynamically.
         "winsdk",
@@ -29,6 +35,8 @@ a = Analysis(
         "PIL",
         "PIL.Image",
         "PIL.ImageDraw",
+        # certifi is imported lazily in updater._ssl_context().
+        "certifi",
         # Local modules imported lazily inside thread callbacks — list them
         # explicitly so PyInstaller's static analyser does not miss them.
         "hooks_setup",

@@ -65,17 +65,19 @@ def _run_update_check(config: "Config") -> None:
     from version import __version__
 
     try:
-        available, latest = check_for_update()
+        available, latest, error = check_for_update()
 
         if available:
             notifier.update_available(
                 __version__, latest, RELEASES_URL,
                 sound_enabled=config.sound_enabled,
             )
-        elif latest is None:
+        elif error:
+            # Show the specific error so users can diagnose the problem
+            # instead of seeing a generic "check your internet" message.
             notifier.generic(
                 "cc-notify — Update Check Failed",
-                "Could not reach GitHub. Check your internet connection.",
+                error,
                 sound_enabled=False,
             )
         else:

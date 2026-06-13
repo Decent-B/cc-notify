@@ -18,6 +18,10 @@ dependencies = [
     "win11toast>=0.36",
     "pystray>=0.19",
     "pillow>=10.0",
+    # Provides the Mozilla CA bundle for reliable HTTPS in PyInstaller bundles.
+    # urllib's default SSL context cannot find the Windows certificate store
+    # inside a frozen executable; certifi's self-contained bundle works everywhere.
+    "certifi>=2024.0",
 ]
 
 # Build-time only; not bundled into the EXE.
