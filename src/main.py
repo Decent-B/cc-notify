@@ -12,11 +12,20 @@ Normal startup sequence:
   6. Hand control to the pystray tray icon (blocks until Exit)
 
 Protocol handler mode (cc-notify:// URI):
-  When Windows activates the app via the cc-notify:// URI scheme (i.e. the
-  user clicked an update toast), the process receives the URI as argv[1].
-  In that case the startup sequence above is skipped entirely — the process
-  reads the stored token, sends GET /do-update to the running instance, and
-  exits immediately.
+  When Windows activates the app via the cc-notify:// URI scheme the process
+  receives the URI as argv[1] and exits immediately after handling it; the
+  normal startup sequence is skipped entirely.
+
+  cc-notify://install
+    Reads the stored token and port, sends GET /do-update to the running
+    instance to trigger the self-update flow.
+
+  cc-notify://focus?uri=<encoded-vscode-uri>
+    Activates the VS Code window using SetForegroundWindow while this process
+    still holds the foreground activation rights granted by Windows shell.
+    On Windows 11 this switches the active virtual desktop when VS Code is on
+    a different one.  The decoded vscode:// URI is then dispatched via the
+    Windows shell for navigation.
 """
 from __future__ import annotations
 
@@ -47,14 +56,53 @@ def _start_server(app, host: str, port: int) -> None:
     serve(app, host=host, port=port, threads=4)
 
 
-def _handle_protocol_uri(uri: str) -> None:
-    """
-    Handle a cc-notify:// URI activation.
+# ── Protocol handler helpers ──────────────────────────────────────────────────
 
-    Reads the stored webhook token and port, sends GET /do-update to the
-    running tray instance, then exits.  This process is intentionally
-    short-lived — its only job is to signal the running instance.
+def _activate_vscode() -> None:
     """
+    Find the topmost VS Code window and bring it to the foreground.
+
+    Must be called from a process that holds foreground activation rights —
+    a process just started by Windows shell via a URI scheme activation
+    qualifies.  On Windows 11, SetForegroundWindow with those rights also
+    switches the active virtual desktop when the target window is on a
+    different one.
+    """
+    import ctypes
+    import ctypes.wintypes
+
+    user32 = ctypes.windll.user32
+    found = [None]
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+    )
+
+    def _cb(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        if "Visual Studio Code" in buf.value:
+            found[0] = hwnd
+            return False  # stop at the first (topmost Z-order) match
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_cb), 0)
+
+    if found[0]:
+        user32.ShowWindow(found[0], 9)        # SW_RESTORE: un-minimise if needed
+        user32.SetForegroundWindow(found[0])
+        logger.debug("Activated VS Code window hwnd=%d", found[0])
+    else:
+        logger.debug("No VS Code window found to activate")
+
+
+def _handle_install_uri() -> None:
+    """Signal the running tray instance to apply the pending update."""
     import json
     import os
     import urllib.error
@@ -72,16 +120,16 @@ def _handle_protocol_uri(uri: str) -> None:
         port = 9876
 
     try:
-        state = json.loads(
+        state_data = json.loads(
             (config_dir / "state.json").read_text(encoding="utf-8")
         )
-        token = state.get("webhook_token", "")
+        token = state_data.get("webhook_token", "")
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         token = ""
 
     if not token:
         logger.warning("Protocol handler: no webhook token found in state.json")
-        sys.exit(1)
+        return
 
     url = f"http://127.0.0.1:{port}/do-update?token={token}"
     try:
@@ -92,8 +140,51 @@ def _handle_protocol_uri(uri: str) -> None:
     except Exception as exc:
         logger.warning("Protocol handler: could not reach running instance: %s", exc)
 
+
+def _handle_focus_uri(uri: str) -> None:
+    """
+    Activate VS Code's window (switching virtual desktops if needed), then
+    dispatch the embedded vscode:// URI for workspace navigation.
+
+    The vscode:// target is percent-encoded in the uri query string as the
+    'uri' parameter.  parse_qs decodes it automatically before forwarding.
+    """
+    import subprocess
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(uri)
+    params = urllib.parse.parse_qs(parsed.query)
+    vscode_uri = params.get("uri", [""])[0]  # parse_qs URL-decodes values
+
+    # Activate VS Code before dispatching the URI so our foreground rights
+    # are used for SetForegroundWindow, not VS Code's IPC forwarding path.
+    _activate_vscode()
+
+    if vscode_uri.startswith("vscode://"):
+        subprocess.Popen(
+            ["cmd.exe", "/c", "start", "", vscode_uri],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+
+def _handle_protocol_uri(uri: str) -> None:
+    """
+    Dispatch a cc-notify:// URI activation to the appropriate handler,
+    then exit.  This process is always ephemeral in protocol handler mode.
+    """
+    if uri.startswith("cc-notify://install"):
+        _handle_install_uri()
+    elif uri.startswith("cc-notify://focus"):
+        _handle_focus_uri(uri)
+    else:
+        logger.warning("Protocol handler: unrecognised URI %r", uri)
     sys.exit(0)
 
+
+# ── Normal startup ────────────────────────────────────────────────────────────
 
 def main() -> None:
     # Handle cc-notify:// URI activations before normal startup.
