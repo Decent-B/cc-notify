@@ -65,18 +65,21 @@ bash "${REPO_ROOT}/scripts/build-windows.sh"
 
 section "2/5  Launch"
 
-# Stop any existing instance so the port is free.
-# Pipeline idiom is required: Stop-Process with -ErrorAction SilentlyContinue
-# still sets $? to False in Windows PowerShell 5.1 when the process doesn't
-# exist, causing PowerShell to exit 1 and bash's set -e to kill the script.
-# Piping through Get-Process means Stop-Process receives no input (a no-op
-# that succeeds), keeping $? True and the exit code 0.
-powershell.exe -NoProfile -Command \
-  "Get-Process -Name 'cc-notify' -ErrorAction SilentlyContinue | Stop-Process"
-sleep 1
-
-powershell.exe -NoProfile -Command \
-  "Start-Process '${WIN_PATH}\dist\cc-notify.exe'"
+# Consolidate kill + launch into one PowerShell session to avoid the PS 5.1
+# exit-code trap: any cmdlet that touches a missing process sets $? = False,
+# and PowerShell -Command exits 1 when $? is False — killing bash's set -e.
+# Using an explicit if-conditional keeps $? True regardless of whether the
+# process exists.  We also copy the EXE to %TEMP% before launching because
+# Windows may refuse to start a process directly from a WSL2 UNC path
+# (\\wsl.localhost\...) due to security zone restrictions.
+powershell.exe -NoProfile -Command "
+  \$p = Get-Process -Name 'cc-notify' -ErrorAction SilentlyContinue
+  if (\$p) { \$p | Stop-Process }
+  Start-Sleep -Seconds 1
+  \$exe = \"\$env:TEMP\cc-notify.exe\"
+  Copy-Item '${WIN_PATH}\dist\cc-notify.exe' \$exe -Force
+  Start-Process \$exe
+"
 echo "  cc-notify.exe launched"
 
 # ── Step 3: Health ────────────────────────────────────────────────────────────
