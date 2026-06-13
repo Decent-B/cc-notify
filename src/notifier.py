@@ -95,9 +95,9 @@ def _ensure_app_registered() -> None:
         if _app_registered:
             return
         if sys.platform == "win32":
+            import ctypes
+            import winreg
             try:
-                import ctypes
-                import winreg
                 key_path = rf"Software\Classes\AppUserModelId\{_AUMID}"
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
                     winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, _DISPLAY_NAME)
@@ -105,6 +105,23 @@ def _ensure_app_registered() -> None:
                 logger.debug("Registered AUMID %s → %r", _AUMID, _DISPLAY_NAME)
             except Exception as exc:
                 logger.warning("Could not register app AUMID: %s", exc)
+            try:
+                exe = sys.executable
+                cmd = f'"{exe}" "%1"'
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\cc-notify") as k:
+                    winreg.SetValueEx(k, None, 0, winreg.REG_SZ, "URL:cc-notify Protocol")
+                    winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
+                with winreg.CreateKey(
+                    winreg.HKEY_CURRENT_USER, r"Software\Classes\cc-notify\DefaultIcon"
+                ) as k:
+                    winreg.SetValueEx(k, None, 0, winreg.REG_SZ, f'"{exe}",0')
+                with winreg.CreateKey(
+                    winreg.HKEY_CURRENT_USER, r"Software\Classes\cc-notify\shell\open\command"
+                ) as k:
+                    winreg.SetValueEx(k, None, 0, winreg.REG_SZ, cmd)
+                logger.debug("Registered cc-notify:// URI scheme → %s", exe)
+            except Exception as exc:
+                logger.warning("Could not register cc-notify:// URI scheme: %s", exc)
         _app_registered = True
 
 
@@ -302,13 +319,13 @@ def generic(title: str, message: str, sound_enabled: bool = True) -> None:
     _send(title or "Claude Code", message, "generic", sound_enabled)
 
 
-def update_available(current: str, latest: str, releases_url: str, sound_enabled: bool = True) -> None:
+def update_available(current: str, latest: str, install_uri: str, sound_enabled: bool = True) -> None:
     """
     Notify that a newer release is available.
 
-    The toast is clickable — clicking it opens releases_url in the browser.
-    on_click is a URL string here (not a callable) because the target is a
-    browser page, not VS Code.
+    The toast is clickable — clicking it activates install_uri, which is the
+    cc-notify:// protocol URI that signals the running instance to apply the
+    update without opening a browser.
     """
     _ensure_app_registered()
     try:
@@ -324,8 +341,8 @@ def update_available(current: str, latest: str, releases_url: str, sound_enabled
 
         notify(
             "cc-notify — Update Available",
-            f"Version {latest} is available. You have {current}. Click to download.",
-            on_click=releases_url,
+            f"Version {latest} is available. Click to install automatically.",
+            on_click=install_uri,
             app_id=_AUMID,
             **kwargs,
         )
