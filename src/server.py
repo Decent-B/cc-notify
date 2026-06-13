@@ -6,11 +6,19 @@ Windows toast notification. All hook calls are fire-and-forget (async: true in
 settings.json), so the server always returns 200 immediately — Claude Code does
 not wait for the response.
 
+Authentication
+  Every request to /webhook must carry the per-install secret token as a query
+  parameter: POST /webhook?token=<value>
+  The token is generated at first launch, stored in state.json, and embedded
+  in the hook URL written to Claude Code's settings.json during setup.
+  Requests without a valid token are rejected with 403 before any processing.
+
 Claude Code hook payload reference:
   https://docs.anthropic.com/en/docs/claude-code/hooks
 """
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import TYPE_CHECKING
 
@@ -22,11 +30,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def create_app(config: "Config") -> Flask:
+def create_app(config: "Config", webhook_token: str) -> Flask:
+    """
+    Build the Flask application.
+
+    webhook_token — the per-install secret that every /webhook request must
+    supply as ?token=<value>.  Requests with a missing or incorrect token are
+    rejected with 403 before any hook processing.
+    """
     app = Flask(__name__, instance_relative_config=False)
     # Suppress Flask's startup banner and per-request logging in the tray app.
     import logging as _logging
     _logging.getLogger("werkzeug").setLevel(_logging.ERROR)
+
+    @app.before_request
+    def _authenticate():
+        # Only the /webhook endpoint requires the token; /health is intentionally
+        # unauthenticated so the pre-push check script can probe liveness easily.
+        if request.endpoint != "webhook":
+            return
+        provided = request.args.get("token", "")
+        # hmac.compare_digest performs a constant-time comparison so an attacker
+        # cannot infer the correct token from response-timing differences.
+        if not provided or not hmac.compare_digest(provided, webhook_token):
+            logger.warning(
+                "Rejected /webhook request with invalid or missing token "
+                "(remote_addr=%s)", request.remote_addr,
+            )
+            return jsonify({"error": "unauthorized"}), 403
 
     @app.post("/webhook")
     def webhook():

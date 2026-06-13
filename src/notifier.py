@@ -9,6 +9,7 @@ take down the webhook server.
 from __future__ import annotations
 
 import logging
+import os.path
 import shlex
 
 logger = logging.getLogger(__name__)
@@ -24,19 +25,28 @@ _SOUNDS: dict[str, str] = {
 
 def _vscode_launcher(cwd: str):
     """
-    Return an on_click callable that opens VS Code at cwd, or None if cwd is empty.
+    Return an on_click callable that opens VS Code at cwd, or None if cwd is
+    empty or does not look like an absolute filesystem path.
 
     Clicking the toast runs `code <cwd>`.  Two path styles are handled:
 
       Windows path (e.g. C:\\Users\\...):
-        subprocess.Popen(["code", cwd]) — VS Code CLI on the Windows PATH.
+        subprocess.Popen(["code", "--", cwd]) — the "--" sentinel tells the
+        VS Code CLI that the following argument is a path, not a flag.  This
+        prevents a crafted cwd value like "--inspect" from being interpreted
+        as a CLI option.
 
       WSL2 Linux path (e.g. /home/user/project):
         wsl.exe runs `code <cwd>` inside the distro so VS Code opens with
-        the Remote WSL extension active for that folder, preserving the
-        correct filesystem context.
+        the Remote WSL extension active for that folder.  shlex.quote handles
+        shell-safe quoting so path characters cannot escape the argument.
+
+    Only absolute paths pass the os.path.isabs() guard, so values that begin
+    with "--" or are otherwise not filesystem paths are silently ignored.
     """
-    if not cwd:
+    # Reject empty or non-absolute values — legitimate Claude Code cwd fields
+    # are always absolute paths (e.g. "C:\projects\foo" or "/home/user/foo").
+    if not cwd or not os.path.isabs(cwd):
         return None
 
     def _launch(args=None):
@@ -50,8 +60,10 @@ def _vscode_launcher(cwd: str):
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             else:
+                # "--" separates options from positional arguments, ensuring cwd
+                # is treated as a path even if it begins with a hyphen.
                 subprocess.Popen(
-                    ["code", cwd],
+                    ["code", "--", cwd],
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             logger.debug("Opened VS Code at: %s", cwd)

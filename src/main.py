@@ -4,11 +4,12 @@ Entry point for the PyInstaller-bundled tray application.
 
 Startup sequence:
   1. Load config from %APPDATA%/cc-notify/config.json
-  2. Check the webhook port is free (single-instance guard)
-  3. Start the Waitress WSGI server in a daemon thread
-  4. Auto-configure Claude Code hooks if this version hasn't done so yet
+  2. Ensure the per-install webhook token exists in state.json
+  3. Check the webhook port is free (single-instance guard)
+  4. Start the Waitress WSGI server on 127.0.0.1 in a daemon thread
+  5. Auto-configure Claude Code hooks if this version hasn't done so yet
      (first install or post-update launch) — runs in a background thread
-  5. Hand control to the pystray tray icon (blocks until Exit)
+  6. Hand control to the pystray tray icon (blocks until Exit)
 """
 from __future__ import annotations
 
@@ -41,9 +42,14 @@ def _start_server(app, host: str, port: int) -> None:
 def main() -> None:
     from config import Config
     from server import create_app
+    from state import ensure_webhook_token
     from tray import maybe_run_auto_setup, run_tray
 
     config = Config.load()
+
+    # Generate the per-install token before any background threads start so
+    # there is no race between generation (main thread) and reads (other threads).
+    webhook_token = ensure_webhook_token()
 
     if _port_in_use(config.port):
         logger.error(
@@ -62,11 +68,15 @@ def main() -> None:
             pass
         sys.exit(1)
 
-    app = create_app(config)
+    app = create_app(config, webhook_token)
 
     server_thread = threading.Thread(
+        # Bind only to the loopback interface.  Claude Code on native Windows and
+        # inside WSL2 both reach this via localhost (WSL2 localhost forwarding is
+        # on by default).  Binding to 0.0.0.0 would expose the port to every host
+        # on the LAN, which is unnecessary and increases the attack surface.
         target=_start_server,
-        args=(app, "0.0.0.0", config.port),
+        args=(app, "127.0.0.1", config.port),
         daemon=True,
         name="webhook-server",
     )

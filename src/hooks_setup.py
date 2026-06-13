@@ -90,7 +90,7 @@ def _apply_hooks(settings: dict, webhook_url: str) -> dict:
 
 # ── Windows setup ─────────────────────────────────────────────────────────────
 
-def setup_windows(port: int) -> tuple[bool, Optional[str]]:
+def setup_windows(port: int, token: str) -> tuple[bool, Optional[str]]:
     """
     Merge webhook hooks into %USERPROFILE%\\.claude\\settings.json.
 
@@ -105,7 +105,8 @@ def setup_windows(port: int) -> tuple[bool, Optional[str]]:
         logger.warning("[Windows] USERPROFILE env var not set; falling back to Path.home()")
         settings_path = Path.home() / ".claude" / "settings.json"
 
-    webhook_url = f"http://localhost:{port}/webhook"
+    # The token is included in the URL so the server can authenticate requests.
+    webhook_url = f"http://localhost:{port}/webhook?token={token}"
 
     logger.info("[Windows] Settings file : %s", settings_path)
     logger.info("[Windows] Webhook URL   : %s", webhook_url)
@@ -282,7 +283,7 @@ except OSError as exc:
 """
 
 
-def setup_wsl2(port: int, distro: Optional[str] = None) -> tuple[bool, Optional[str]]:
+def setup_wsl2(port: int, token: str, distro: Optional[str] = None) -> tuple[bool, Optional[str]]:
     """
     Configure Claude Code hooks inside a WSL2 distro.
 
@@ -293,7 +294,9 @@ def setup_wsl2(port: int, distro: Optional[str] = None) -> tuple[bool, Optional[
     Returns (success, error_message_or_None).
     """
     label = distro or "(default distro)"
-    webhook_url = f"http://localhost:{port}/webhook"
+    # Token is included in the URL so the server can authenticate requests from
+    # Claude Code running inside the WSL2 distro.
+    webhook_url = f"http://localhost:{port}/webhook?token={token}"
 
     logger.info("[WSL2:%s] Configuring hooks", label)
     logger.info("[WSL2:%s] Webhook URL: %s", label, webhook_url)
@@ -362,15 +365,22 @@ def setup_all(port: int) -> SetupResult:
     targeted; users with multiple distros can run scripts/setup-hooks.sh
     manually inside each additional distro.
 
+    The webhook token is read from state.json and embedded in every hook URL.
+    ensure_webhook_token() must have been called from the main thread before
+    this function runs so the token is guaranteed to exist.
+
     This function may take several seconds when WSL2 is present (subprocess
     round-trips to the distro).  Call it from a background thread.
     """
+    from state import get_webhook_token
+    token = get_webhook_token() or ""
+
     logger.info("=== cc-notify hook setup starting (port %d) ===", port)
     result = SetupResult()
 
     # ── Step 1/2: Windows ────────────────────────────────────────────────────
     logger.info("--- [1/2] Windows Claude Code ---")
-    result.windows_ok, result.windows_error = setup_windows(port)
+    result.windows_ok, result.windows_error = setup_windows(port, token)
     if result.windows_ok:
         logger.info("[1/2] Windows ✓")
     else:
@@ -391,7 +401,7 @@ def setup_all(port: int) -> SetupResult:
                 "Run scripts/setup-hooks.sh inside any other distro manually.",
                 len(distros), distros, result.wsl2_distro,
             )
-        result.wsl2_ok, result.wsl2_error = setup_wsl2(port, result.wsl2_distro)
+        result.wsl2_ok, result.wsl2_error = setup_wsl2(port, token, result.wsl2_distro)
         if result.wsl2_ok:
             logger.info("[2/2] WSL2 (%s) ✓", result.wsl2_distro)
         else:

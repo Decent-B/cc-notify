@@ -6,7 +6,14 @@
     Merges the required webhook entries into %USERPROFILE%\.claude\settings.json
     so Claude Code fires HTTP hooks to the local cc-notify server.
 
-    Run this ONCE after installing cc-notify. Restart Claude Code afterwards.
+    cc-notify.exe must be running before you call this script — it generates
+    the per-install authentication token on first launch and stores it in
+    %APPDATA%\cc-notify\state.json.  This script reads that token and embeds
+    it in the webhook URL so the server can reject unsolicited requests.
+
+    The preferred setup method is the in-app "Setup Claude Code Hooks…" tray
+    menu item, which handles the token automatically.  Use this script only when
+    manual setup is required (e.g. custom port, startup shortcut).
 
 .PARAMETER Port
     The port cc-notify is listening on. Default: 9876.
@@ -36,7 +43,30 @@ $ErrorActionPreference = "Stop"
 
 $SettingsDir  = Join-Path $env:USERPROFILE ".claude"
 $SettingsPath = Join-Path $SettingsDir "settings.json"
-$WebhookUrl   = "http://localhost:$Port/webhook"
+$StatePath    = Join-Path $env:APPDATA "cc-notify\state.json"
+
+# ── Read the per-install webhook token ────────────────────────────────────────
+
+$Token = ""
+if (Test-Path $StatePath) {
+    try {
+        $state = Get-Content $StatePath -Raw | ConvertFrom-Json
+        $Token = $state.webhook_token
+    } catch {
+        Write-Warning "Could not parse state.json: $_"
+    }
+}
+
+if (-not $Token) {
+    Write-Error (
+        "Webhook token not found in $StatePath.`n" +
+        "Start cc-notify.exe first (it generates the token on launch), " +
+        "then re-run this script."
+    )
+    exit 1
+}
+
+$WebhookUrl = "http://localhost:$Port/webhook?token=$Token"
 
 # ── Load or initialise settings ───────────────────────────────────────────────
 
@@ -94,7 +124,8 @@ Write-Host ""
 Write-Host "✅  Claude Code hooks configured at:"
 Write-Host "    $SettingsPath"
 Write-Host ""
-Write-Host "    Webhook URL : $WebhookUrl"
+# Redact the token from terminal output — it is stored in settings.json already.
+Write-Host "    Webhook URL : http://localhost:$Port/webhook?token=<redacted>"
 Write-Host "    Events      : Notification, Stop, PermissionRequest"
 Write-Host ""
 Write-Host "    Restart Claude Code for changes to take effect."

@@ -131,6 +131,31 @@ WIN_PATH=$(wslpath -w "$REPO_ROOT")
 WIN_HOST="${CC_NOTIFY_HOST:-localhost}"
 BASE_URL="http://${WIN_HOST}:9876"
 
+# ── Read the per-install webhook token from cc-notify's Windows state file ─────
+# The token is stored in %APPDATA%\cc-notify\state.json and must be included
+# as ?token=<value> in every POST to /webhook.
+
+APPDATA_WIN="$(powershell.exe -NoProfile -Command 'Write-Output $env:APPDATA' \
+  2>/dev/null | tr -d '\r\n')" || true
+STATE_FILE="$(wslpath "${APPDATA_WIN}/cc-notify/state.json" 2>/dev/null)" || true
+TOKEN=""
+if [[ -f "${STATE_FILE:-}" ]]; then
+  TOKEN="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$STATE_FILE', encoding='utf-8'))
+    print(d.get('webhook_token', ''), end='')
+except Exception:
+    pass
+" 2>/dev/null)" || true
+fi
+
+if [[ -z "$TOKEN" ]]; then
+  echo "WARNING: Could not read webhook token from state.json."
+  echo "  Webhook tests will fail (server requires a valid token)."
+  echo "  Launch cc-notify.exe once to generate the token, then re-run."
+fi
+
 PASS=0
 FAIL=0
 
@@ -146,7 +171,7 @@ webhook_test() {
   local payload="$2"
   local status
   status=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X POST "${BASE_URL}/webhook" \
+    -X POST "${BASE_URL}/webhook?token=${TOKEN}" \
     -H "Content-Type: application/json" \
     -d "$payload")
   if [[ "$status" == "200" ]]; then
