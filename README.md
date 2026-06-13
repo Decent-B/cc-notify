@@ -252,25 +252,16 @@ This script resolves the current directory to a Windows UNC path
 bash scripts/build-windows.sh --launch
 ```
 
-**Test the webhook from WSL2** (with the EXE running on Windows):
+**Run the full pre-push checklist from WSL2:**
 
 ```bash
-# Detect the Windows host IP automatically
-WIN_HOST=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)
-
-# "Task Complete" toast
-curl -s -X POST "http://${WIN_HOST}:9876/webhook" \
-  -H "Content-Type: application/json" \
-  -d '{"hook_event_name":"Stop","session_id":"test","cwd":"/home"}'
-
-# "Permission Required" toast (alarm sound)
-curl -s -X POST "http://${WIN_HOST}:9876/webhook" \
-  -H "Content-Type: application/json" \
-  -d '{"hook_event_name":"PermissionRequest","tool_name":"Bash","session_id":"test","cwd":"/home"}'
-
-# Health check
-curl -s "http://${WIN_HOST}:9876/health"
+bash scripts/pre-push-check.sh
 ```
+
+This single command builds the EXE, launches it, waits for the webhook
+server to be ready, fires test payloads for every notification type,
+and verifies the working tree is clean. Watch the Windows Notification
+Center — three distinct toasts should appear during the run.
 
 ---
 
@@ -298,10 +289,11 @@ cc-notify/
 │   ├── hooks_setup.py   # auto-detect + configure Windows/WSL2 Claude Code hooks
 │   └── config.py        # %APPDATA% config persistence
 ├── scripts/
-│   ├── setup-hooks.ps1  # Windows: configure Claude Code hooks
-│   ├── setup-hooks.sh   # WSL2: configure Claude Code hooks
-│   ├── build-windows.sh # WSL2: build the Windows EXE via PowerShell interop
-│   └── create_icon.py   # generate assets/icon.ico via Pillow
+│   ├── setup-hooks.ps1      # Windows: configure Claude Code hooks
+│   ├── setup-hooks.sh       # WSL2: configure Claude Code hooks
+│   ├── build-windows.sh     # WSL2: build the Windows EXE via PowerShell interop
+│   ├── pre-push-check.sh    # WSL2: full pre-push build + smoke-test in one command
+│   └── create_icon.py       # generate assets/icon.ico via Pillow
 ├── examples/
 │   ├── settings-snippet.json   # drop this into ~/.claude/settings.json
 │   └── config-example.json     # annotated cc-notify config template
