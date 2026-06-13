@@ -12,10 +12,103 @@
 # three distinct toasts should appear (Task Complete, Permission
 # Required with alarm sound, and Waiting for Input).
 #
-# Usage (from anywhere in the repo):
-#   bash scripts/pre-push-check.sh
+# Usage:
+#   bash scripts/pre-push-check.sh                  # run all steps
+#   bash scripts/pre-push-check.sh --from-step 3    # skip build + launch
+#   bash scripts/pre-push-check.sh -h               # show this help
 
 set -euo pipefail
+
+# ── Help ──────────────────────────────────────────────────────────────────────
+
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/pre-push-check.sh [--from-step N] [-h|--help]
+
+Run the full pre-push verification checklist from inside WSL2.
+
+Steps
+  1  Build     Compile the Windows EXE via PowerShell interop
+               (delegates to scripts/build-windows.sh)
+  2  Launch    Stop any running cc-notify instance, copy the fresh
+               EXE to %%TEMP%%, and start it
+  3  Health    Poll http://<win-host>:9876/health until the webhook
+               server is ready (15-second timeout)
+  4  Webhooks  POST a test payload for every notification type and
+               verify each returns HTTP 200
+               (watch Windows Notification Center — three toasts
+               should appear: Task Complete, Permission Required,
+               Waiting for Input)
+  5  Git       Confirm the working tree is clean before pushing
+
+Options
+  --from-step N   Start at step N (1–5), skipping all earlier steps.
+                  Useful when the build is already fresh and you only
+                  want to re-run the smoke tests, e.g. --from-step 3.
+
+  -h, --help      Print this message and exit.
+
+Examples
+  bash scripts/pre-push-check.sh
+      Full run: build → launch → health → webhooks → git check.
+
+  bash scripts/pre-push-check.sh --from-step 2
+      Skip the build; restart the EXE and run all remaining steps.
+
+  bash scripts/pre-push-check.sh --from-step 3
+      Assume cc-notify is already running; jump straight to the
+      health check and everything after it.
+
+  bash scripts/pre-push-check.sh --from-step 4
+      Server is up; re-fire the webhook payloads and check git only.
+
+  bash scripts/pre-push-check.sh --from-step 5
+      Only verify the working tree is clean.
+
+Notes
+  - This script must be run from inside WSL2 (it uses powershell.exe
+    via WSL2 interop to drive the Windows side of the build).
+  - The Windows host IP is read from /etc/resolv.conf at runtime.
+  - Requires curl on the WSL2 side.
+EOF
+}
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+
+FROM_STEP=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --from-step)
+      if [[ -z "${2-}" || ! "${2}" =~ ^[1-5]$ ]]; then
+        echo "error: --from-step requires a value between 1 and 5." >&2
+        echo "       Run with --help for usage." >&2
+        exit 1
+      fi
+      FROM_STEP="$2"
+      shift 2
+      ;;
+    --from-step=*)
+      val="${1#--from-step=}"
+      if [[ ! "$val" =~ ^[1-5]$ ]]; then
+        echo "error: --from-step requires a value between 1 and 5." >&2
+        echo "       Run with --help for usage." >&2
+        exit 1
+      fi
+      FROM_STEP="$val"
+      shift
+      ;;
+    *)
+      echo "error: unknown option '$1'." >&2
+      echo "       Run with --help for usage." >&2
+      exit 1
+      ;;
+  esac
+done
 
 # ── Guard: WSL2 only ──────────────────────────────────────────────────────────
 
@@ -56,71 +149,81 @@ webhook_test() {
   fi
 }
 
+[[ $FROM_STEP -gt 1 ]] && echo "  (skipping steps 1–$((FROM_STEP - 1)))"
+
 # ── Step 1: Build ─────────────────────────────────────────────────────────────
 
-section "1/5  Build"
-bash "${REPO_ROOT}/scripts/build-windows.sh"
+if [[ $FROM_STEP -le 1 ]]; then
+  section "1/5  Build"
+  bash "${REPO_ROOT}/scripts/build-windows.sh"
+fi
 
 # ── Step 2: Launch ────────────────────────────────────────────────────────────
 
-section "2/5  Launch"
+if [[ $FROM_STEP -le 2 ]]; then
+  section "2/5  Launch"
 
-# Consolidate kill + launch into one PowerShell session to avoid the PS 5.1
-# exit-code trap: any cmdlet that touches a missing process sets $? = False,
-# and PowerShell -Command exits 1 when $? is False — killing bash's set -e.
-# Using an explicit if-conditional keeps $? True regardless of whether the
-# process exists.  We also copy the EXE to %TEMP% before launching because
-# Windows may refuse to start a process directly from a WSL2 UNC path
-# (\\wsl.localhost\...) due to security zone restrictions.
-powershell.exe -NoProfile -Command "
-  \$p = Get-Process -Name 'cc-notify' -ErrorAction SilentlyContinue
-  if (\$p) { \$p | Stop-Process }
-  Start-Sleep -Seconds 1
-  \$exe = \"\$env:TEMP\cc-notify.exe\"
-  Copy-Item '${WIN_PATH}\dist\cc-notify.exe' \$exe -Force
-  Start-Process \$exe
-"
-echo "  cc-notify.exe launched"
+  # Consolidate kill + launch into one PowerShell session to avoid the PS 5.1
+  # exit-code trap: any cmdlet that touches a missing process sets $? = False,
+  # and PowerShell -Command exits 1 when $? is False — killing bash's set -e.
+  # Using an explicit if-conditional keeps $? True regardless of whether the
+  # process exists.  We also copy the EXE to %TEMP% before launching because
+  # Windows may refuse to start a process directly from a WSL2 UNC path
+  # (\\wsl.localhost\...) due to security zone restrictions.
+  powershell.exe -NoProfile -Command "
+    \$p = Get-Process -Name 'cc-notify' -ErrorAction SilentlyContinue
+    if (\$p) { \$p | Stop-Process }
+    Start-Sleep -Seconds 1
+    \$exe = \"\$env:TEMP\cc-notify.exe\"
+    Copy-Item '${WIN_PATH}\dist\cc-notify.exe' \$exe -Force
+    Start-Process \$exe
+  "
+  echo "  cc-notify.exe launched"
+fi
 
 # ── Step 3: Health ────────────────────────────────────────────────────────────
 
-section "3/5  Health"
-printf "  Waiting for server"
+if [[ $FROM_STEP -le 3 ]]; then
+  section "3/5  Health"
+  printf "  Waiting for server"
 
-READY=false
-for i in $(seq 1 15); do
-  if curl -sf "${BASE_URL}/health" >/dev/null 2>&1; then
-    READY=true
-    echo " — ready"
-    break
+  READY=false
+  for i in $(seq 1 15); do
+    if curl -sf "${BASE_URL}/health" >/dev/null 2>&1; then
+      READY=true
+      echo " — ready"
+      break
+    fi
+    printf "."
+    sleep 1
+  done
+
+  if ! $READY; then
+    echo ""
+    fail "Server did not become ready within 15 s"
+    echo ""
+    echo "  Cannot run webhook tests. Check that cc-notify.exe started"
+    echo "  and that port 9876 is not in use by another process."
+    exit 1
   fi
-  printf "."
-  sleep 1
-done
 
-if ! $READY; then
-  echo ""
-  fail "Server did not become ready within 15 s"
-  echo ""
-  echo "  Cannot run webhook tests. Check that cc-notify.exe started"
-  echo "  and that port 9876 is not in use by another process."
-  exit 1
+  ok "$(curl -s "${BASE_URL}/health")"
 fi
-
-ok "$(curl -s "${BASE_URL}/health")"
 
 # ── Step 4: Webhook tests ─────────────────────────────────────────────────────
 
-section "4/5  Webhooks  (watch for toasts on screen)"
+if [[ $FROM_STEP -le 4 ]]; then
+  section "4/5  Webhooks  (watch for toasts on screen)"
 
-webhook_test "Stop          → Task Complete toast" \
-  '{"hook_event_name":"Stop","session_id":"test","cwd":"/home"}'
+  webhook_test "Stop          → Task Complete toast" \
+    '{"hook_event_name":"Stop","session_id":"test","cwd":"/home"}'
 
-webhook_test "PermissionRequest → Permission Required toast (alarm)" \
-  '{"hook_event_name":"PermissionRequest","tool_name":"Bash","session_id":"test","cwd":"/home"}'
+  webhook_test "PermissionRequest → Permission Required toast (alarm)" \
+    '{"hook_event_name":"PermissionRequest","tool_name":"Bash","session_id":"test","cwd":"/home"}'
 
-webhook_test "Notification/idle_prompt → Waiting for Input toast" \
-  '{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Waiting for your reply.","session_id":"test","cwd":"/home"}'
+  webhook_test "Notification/idle_prompt → Waiting for Input toast" \
+    '{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Waiting for your reply.","session_id":"test","cwd":"/home"}'
+fi
 
 # ── Step 5: Git status ────────────────────────────────────────────────────────
 
