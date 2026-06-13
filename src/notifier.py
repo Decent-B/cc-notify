@@ -24,22 +24,29 @@ Notification images
   work but Windows will centre-crop them to the hero aspect ratio.
 
 VS Code focus on click
-  Toast notifications that carry a cwd field use a vscode:// URI as the
-  on_click value (not a Python callable). When on_click is a string, win11toast
-  writes it as the toast XML <toast launch="..."> attribute, so Windows
-  delivers the URI directly to VS Code's registered protocol handler on click —
-  including when the toast is clicked from Action Center after it has timed out.
+  Toast notifications that carry a cwd field use a cc-notify://focus URI as
+  the on_click value.  Routing the click through the cc-notify protocol handler
+  rather than dispatching vscode:// directly solves the cross-virtual-desktop
+  focus problem:
 
-  A Python callable on_click is unreliable in this scenario: win11toast
-  dispatches it via asyncio call_soon_threadsafe(), but by the time a
-  timed-out toast is clicked from Action Center the asyncio future is already
-  resolved and the activation event is silently discarded.
+    vscode:// (old): Windows shell → short-lived Code.exe (has foreground rights)
+                     → IPC forward to existing VS Code → SetForegroundWindow
+                     (rights already gone — cannot switch virtual desktops)
 
-  Using a URI also avoids the foreground-focus chain problem:
-    wsl.exe → bash → code → SetForegroundWindow
-  Windows foreground rights expire (~200 ms) long before VS Code receives the
-  IPC message through that chain. A URI activation via the Windows shell lets
-  the shell grant foreground rights to VS Code directly.
+    cc-notify://focus (new): Windows shell → cc-notify.exe (has foreground rights)
+                             → SetForegroundWindow(vscode_hwnd) [rights still held]
+                             → virtual desktop switches on Windows 11
+                             → cmd /c start vscode://... (navigation only)
+
+  The cc-notify://focus URI carries the vscode:// target as a percent-encoded
+  query parameter.  The cc-notify protocol handler is registered in HKCU by
+  _ensure_app_registered() so it is always current.
+
+  A Python callable on_click is unreliable for Action Center activations:
+  win11toast dispatches it via asyncio call_soon_threadsafe(), but by the time
+  a timed-out toast is clicked the asyncio future is already resolved and the
+  activation event is silently discarded.  URI-based activation works
+  regardless of when the user clicks.
 """
 from __future__ import annotations
 
@@ -203,18 +210,16 @@ def _get_default_wsl2_distro() -> Optional[str]:
 
 def _vscode_uri(cwd: str) -> Optional[str]:
     """
-    Build a vscode:// URI for opening VS Code at cwd, or return None.
+    Build a cc-notify://focus URI that embeds the vscode:// workspace path.
 
-    URI formats:
-      WSL2 path  (starts with /):  vscode://vscode-remote/wsl+<distro><path>
-      Windows path (drive letter): vscode://file/<forward-slash path>
+    Wrapping the click in a cc-notify:// URI lets the protocol handler call
+    SetForegroundWindow while still holding the foreground activation rights
+    granted by Windows shell — which on Windows 11 switches the active virtual
+    desktop.  The vscode:// URI is forwarded afterwards for navigation only.
 
-    The URI is percent-encoded so that spaces and special characters in the
-    path are transmitted correctly to VS Code's URI handler.
-
-    Only absolute paths pass the os.path.isabs() guard.  Values that start
-    with "--" or are not filesystem paths are rejected, preventing a crafted
-    cwd payload from reaching VS Code as a CLI flag.
+    Only absolute paths pass the os.path.isabs() guard.  Values that are not
+    filesystem paths are rejected, preventing crafted cwd payloads from
+    reaching VS Code as a CLI flag.
 
     Returns None when the URI cannot be constructed (empty cwd, non-absolute
     path, or WSL2 not available for a Linux path).
@@ -224,8 +229,7 @@ def _vscode_uri(cwd: str) -> Optional[str]:
 
     if cwd.startswith("/"):
         # WSL2/Linux path — use the vscode-remote URI scheme so VS Code opens
-        # the folder as a proper Remote-WSL session.  The distro name forms part
-        # of the authority component, e.g. wsl+Ubuntu-24.04.
+        # the folder as a proper Remote-WSL session.
         distro = _get_default_wsl2_distro()
         if not distro:
             logger.warning(
@@ -233,18 +237,17 @@ def _vscode_uri(cwd: str) -> Optional[str]:
                 "Ensure WSL2 is installed and at least one distro is running."
             )
             return None
-        # Encode the path component (spaces → %20 etc.) but keep slashes as-is.
         encoded_path = urllib.parse.quote(cwd, safe="/")
-        # Encode the distro name in case it contains unusual characters.
         encoded_distro = urllib.parse.quote(distro, safe="")
-        return f"vscode://vscode-remote/wsl+{encoded_distro}{encoded_path}"
+        vscode_target = f"vscode://vscode-remote/wsl+{encoded_distro}{encoded_path}"
     else:
-        # Windows absolute path — use the vscode://file/ scheme.
-        # Convert backslashes to forward slashes; keep the colon after the
-        # drive letter (e.g. C:/Users/...).
+        # Windows absolute path.
         forward = cwd.replace("\\", "/")
-        encoded = urllib.parse.quote(forward, safe=":/")
-        return f"vscode://file/{encoded}"
+        vscode_target = f"vscode://file/{urllib.parse.quote(forward, safe=':/')}"
+
+    # Embed the vscode:// URI as a query parameter so the focus handler can
+    # reconstruct and dispatch it after activating VS Code's window.
+    return f"cc-notify://focus?uri={urllib.parse.quote(vscode_target, safe='')}"
 
 
 # ── Core send ─────────────────────────────────────────────────────────────────
