@@ -251,13 +251,13 @@ if os.path.exists(path):
         existing_hooks = list(settings.get("hooks", {}).keys())
         print(f"current hooks: {existing_hooks if existing_hooks else '(none)'}", flush=True)
     except json.JSONDecodeError as exc:
-        print(f"warning   : malformed JSON ({exc}) — starting fresh", flush=True)
+        print(f"warning   : malformed JSON ({exc}), starting fresh", flush=True)
         settings = {}
     except OSError as exc:
-        print(f"warning   : cannot read file ({exc}) — starting fresh", flush=True)
+        print(f"warning   : cannot read file ({exc}), starting fresh", flush=True)
         settings = {}
 else:
-    print("file      : not found — will create new settings.json", flush=True)
+    print("file      : not found, will create new settings.json", flush=True)
 
 # Build and merge hooks
 block = {"hooks": [{"type": "http", "url": webhook_url, "async": True}]}
@@ -315,9 +315,15 @@ def setup_wsl2(port: int, distro: Optional[str] = None) -> tuple[bool, Optional[
     try:
         result = subprocess.run(
             cmd,
-            input=_WSL_SETUP_SCRIPT,   # text=True → pass str, not bytes
+            input=_WSL_SETUP_SCRIPT,
             capture_output=True,
             text=True,
+            # Explicit UTF-8 ensures the script is transmitted as UTF-8 to WSL2's
+            # python3 regardless of the Windows system code page.  Without this,
+            # text=True uses the ANSI code page (e.g. CP1252) which encodes
+            # non-ASCII chars like em dashes as single bytes (\x97, etc.) that
+            # Python 3 inside the distro rejects with "Non-UTF-8 code" SyntaxError.
+            encoding="utf-8",
             timeout=30,
         )
 
