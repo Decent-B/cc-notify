@@ -40,6 +40,7 @@ a = Analysis(
         # Local modules imported lazily inside thread callbacks — list them
         # explicitly so PyInstaller's static analyser does not miss them.
         "hooks_setup",
+        "state",
         "updater",
         "version",
     ],

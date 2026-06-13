@@ -96,28 +96,46 @@ def _run_update_check(config: "Config") -> None:
             pass
 
 
-def _run_hook_setup(config: "Config") -> None:
+def _run_hook_setup(config: "Config", *, auto: bool = False) -> None:
     """
     Detect available environments and configure Claude Code hooks in all of them.
 
     Shows a "working" toast immediately, then a result toast when finished.
     Runs on a daemon thread so it never blocks the tray event loop.
+
+    When auto=True the working toast mentions that setup is running automatically
+    (first launch or post-update), so the user knows they didn't trigger it.
     """
     import notifier
+    import state
     from hooks_setup import setup_all
+    from version import __version__
 
     try:
-        notifier.generic(
-            "cc-notify — Setting up hooks…",
-            "Detecting environments, please wait.",
-            sound_enabled=False,
-        )
+        if auto:
+            notifier.generic(
+                "cc-notify — Configuring hooks…",
+                "Setting up Claude Code hooks automatically.",
+                sound_enabled=False,
+            )
+        else:
+            notifier.generic(
+                "cc-notify — Setting up hooks…",
+                "Detecting environments, please wait.",
+                sound_enabled=False,
+            )
 
         result = setup_all(config.port)
 
+        # Persist the configured version so future launches skip auto-setup.
+        # Save as long as the Windows side succeeded — WSL2 is a secondary target
+        # and its failure should not cause the app to re-run setup every launch.
+        if result.windows_ok:
+            state.set_hooks_version(__version__)
+
         if result.fully_ok:
             notifier.generic(
-                "Hooks configured! Restart Claude Code.",
+                "Hooks configured — Restart Claude Code",
                 result.summary(),
                 sound_enabled=config.sound_enabled,
             )
@@ -135,6 +153,34 @@ def _run_hook_setup(config: "Config") -> None:
             _n.generic("Hook setup failed", str(exc), sound_enabled=config.sound_enabled)
         except Exception:
             pass
+
+
+def maybe_run_auto_setup(config: "Config") -> None:
+    """
+    Trigger hook setup in a background thread if this version has not yet
+    configured hooks — covers both fresh installs and post-update launches.
+
+    Silently skips if the stored configured version already matches __version__,
+    so normal restarts incur no overhead.
+    """
+    import state
+    from version import __version__
+
+    configured = state.get_hooks_version()
+    if configured == __version__:
+        return  # already configured for this version — nothing to do
+
+    logger.info(
+        "Auto hook setup: current version=%s, last configured=%s",
+        __version__, configured or "(never)",
+    )
+    threading.Thread(
+        target=_run_hook_setup,
+        args=(config,),
+        kwargs={"auto": True},
+        daemon=True,
+        name="auto-hook-setup",
+    ).start()
 
 
 # ── Tray ──────────────────────────────────────────────────────────────────────

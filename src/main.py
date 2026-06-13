@@ -6,7 +6,9 @@ Startup sequence:
   1. Load config from %APPDATA%/cc-notify/config.json
   2. Check the webhook port is free (single-instance guard)
   3. Start the Waitress WSGI server in a daemon thread
-  4. Hand control to the pystray tray icon (blocks until Exit)
+  4. Auto-configure Claude Code hooks if this version hasn't done so yet
+     (first install or post-update launch) — runs in a background thread
+  5. Hand control to the pystray tray icon (blocks until Exit)
 """
 from __future__ import annotations
 
@@ -39,7 +41,7 @@ def _start_server(app, host: str, port: int) -> None:
 def main() -> None:
     from config import Config
     from server import create_app
-    from tray import run_tray
+    from tray import maybe_run_auto_setup, run_tray
 
     config = Config.load()
 
@@ -69,6 +71,11 @@ def main() -> None:
         name="webhook-server",
     )
     server_thread.start()
+
+    # Run hook setup in the background if this version hasn't configured it yet.
+    # The check is near-instant on normal restarts; setup only runs on first
+    # launch or after an update, and never blocks the tray from appearing.
+    maybe_run_auto_setup(config)
 
     # Block the main thread in the tray icon loop.
     run_tray(config)
