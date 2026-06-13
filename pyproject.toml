@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-notify"
-version = "0.1.4"
+version = "0.1.5"
 description = "Windows tray app that sends native notifications for Claude Code events"
 readme = "README.md"
 license = { text = "MIT" }
