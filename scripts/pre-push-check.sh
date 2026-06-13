@@ -68,7 +68,9 @@ Examples
 Notes
   - This script must be run from inside WSL2 (it uses powershell.exe
     via WSL2 interop to drive the Windows side of the build).
-  - The Windows host IP is read from /etc/resolv.conf at runtime.
+  - The script connects to the Windows host via localhost (WSL2 forwards
+    localhost to Windows by default).  If your setup uses a separate
+    virtual switch IP, override with: CC_NOTIFY_HOST=<ip> bash scripts/pre-push-check.sh
   - Requires curl on the WSL2 side.
 EOF
 }
@@ -121,7 +123,12 @@ fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WIN_PATH=$(wslpath -w "$REPO_ROOT")
-WIN_HOST=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)
+
+# WSL2 forwards localhost to the Windows host by default (mirrored networking
+# and localhostForwarding both work this way).  The /etc/resolv.conf nameserver
+# approach is unreliable — it returns a VPN/Tailscale DNS IP when those are
+# active, not the Windows host.  Override with CC_NOTIFY_HOST if needed.
+WIN_HOST="${CC_NOTIFY_HOST:-localhost}"
 BASE_URL="http://${WIN_HOST}:9876"
 
 PASS=0
