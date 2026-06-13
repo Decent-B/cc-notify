@@ -53,7 +53,46 @@ def _build_icon_image():
     return img
 
 
-# ── Hook setup (runs in a background thread) ──────────────────────────────────
+# ── Background tasks (each runs in a daemon thread) ───────────────────────────
+
+def _run_update_check(config: "Config") -> None:
+    """
+    Query GitHub for the latest release and notify the user of the result.
+    Runs on a daemon thread so the network call never blocks the tray loop.
+    """
+    import notifier
+    from updater import RELEASES_URL, check_for_update
+    from version import __version__
+
+    try:
+        available, latest = check_for_update()
+
+        if available:
+            notifier.update_available(
+                __version__, latest, RELEASES_URL,
+                sound_enabled=config.sound_enabled,
+            )
+        elif latest is None:
+            notifier.generic(
+                "cc-notify — Update Check Failed",
+                "Could not reach GitHub. Check your internet connection.",
+                sound_enabled=False,
+            )
+        else:
+            notifier.generic(
+                "cc-notify — Up to Date",
+                f"You are running the latest version ({__version__}).",
+                sound_enabled=False,
+            )
+
+    except Exception as exc:
+        logger.error("Update check crashed: %s", exc, exc_info=True)
+        try:
+            import notifier as _n
+            _n.generic("Update check failed", str(exc), sound_enabled=False)
+        except Exception:
+            pass
+
 
 def _run_hook_setup(config: "Config") -> None:
     """
@@ -116,6 +155,14 @@ def run_tray(config: "Config") -> None:
             name="hook-setup",
         ).start()
 
+    def on_check_updates(icon, item):
+        threading.Thread(
+            target=_run_update_check,
+            args=(config,),
+            daemon=True,
+            name="update-check",
+        ).start()
+
     def on_open_github(icon, item):
         webbrowser.open(_GITHUB_URL)
 
@@ -129,6 +176,8 @@ def run_tray(config: "Config") -> None:
         pystray.MenuItem(f"Listening on :{config.port}", None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Setup Claude Code Hooks…", on_setup_hooks),
+        pystray.MenuItem("Check for Updates", on_check_updates),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem("Open GitHub", on_open_github),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Exit", on_exit),

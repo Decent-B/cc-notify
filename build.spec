@@ -29,9 +29,11 @@ a = Analysis(
         "PIL",
         "PIL.Image",
         "PIL.ImageDraw",
-        # Hook setup — local module; listed explicitly in case PyInstaller
-        # misses it because it is imported lazily inside a thread callback.
+        # Local modules imported lazily inside thread callbacks — list them
+        # explicitly so PyInstaller's static analyser does not miss them.
         "hooks_setup",
+        "updater",
+        "version",
     ],
     hookspath=[],
     hooksconfig={},

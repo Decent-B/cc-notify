@@ -56,3 +56,29 @@ def stop(sound_enabled: bool = True) -> None:
 def generic(title: str, message: str, sound_enabled: bool = True) -> None:
     """Fallback for any other Claude Code notification type."""
     _send(title or "Claude Code", message, "generic", sound_enabled)
+
+
+def update_available(current: str, latest: str, releases_url: str, sound_enabled: bool = True) -> None:
+    """
+    Notify that a newer release is available.
+
+    The toast is clickable — clicking it opens releases_url in the browser.
+    on_click is handled directly here because the shared _send helper does
+    not expose that parameter (no other notification type needs it).
+    """
+    try:
+        from win11toast import notify
+
+        kwargs: dict = {}
+        if sound_enabled:
+            kwargs["audio"] = {"src": _SOUNDS["generic"]}
+
+        notify(
+            "cc-notify — Update Available",
+            f"Version {latest} is available. You have {current}. Click to download.",
+            on_click=releases_url,
+            **kwargs,
+        )
+        logger.debug("Update notification sent: %s → %s", current, latest)
+    except Exception as exc:
+        logger.warning("Failed to send update notification: %s", exc)

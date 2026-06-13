@@ -79,29 +79,43 @@ jobs:
           body: |
             ## Installation
 
-            1. Download **`cc-notify-${{ env.VERSION }}-windows-x64.exe`** below.
-            2. Run it — a purple bell icon appears in your system tray.
-            3. Configure Claude Code hooks (one command):
+            **1. Download** `cc-notify-${{ env.VERSION }}-windows-x64.exe` from the assets below.
 
-            **Windows (Claude Code native):**
+            > **SmartScreen warning?** Click **"More info"** → **"Run anyway"**. This is expected
+            > for open-source apps without an EV code-signing certificate — the source is fully
+            > auditable here on GitHub.
+
+            **2. Run it** — double-click the EXE. A purple bell icon appears in your system tray.
+
+            **3. Configure Claude Code hooks:**
+
+            **Option A — tray icon (recommended)**
+
+            Right-click the purple bell in your system tray and choose **"Setup Claude Code Hooks…"**:
+
+            ![cc-notify tray menu](https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/assets/tray-menu.png)
+
+            cc-notify auto-detects whether Claude Code is installed natively on Windows, inside WSL2,
+            or both, and configures each environment automatically.
+
+            **Option B — command line**
+
+            *Windows (Claude Code native):*
             ```powershell
             .\scripts\setup-hooks.ps1
             ```
 
-            **WSL2 (Claude Code in WSL):**
+            *WSL2 (Claude Code running inside WSL2):*
             ```bash
             bash scripts/setup-hooks.sh
             ```
 
-            > **SmartScreen warning?**  Click **"More info"** → **"Run anyway"**.
-            > This is expected for open-source apps without an EV code signing certificate.
-            > See [docs/distribution.md](https://github.com/${{ github.repository }}/blob/main/docs/distribution.md#code-signing) for details.
+            **4. Restart Claude Code** for the hook changes to take effect.
+
+            ---
 
             ## Checksums
             See `SHA256SUMS.txt` attached below.
-
-            ## What's Changed
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for full notes.
           files: |
             dist/cc-notify-${{ env.VERSION }}-windows-x64.exe
             dist/SHA256SUMS.txt
