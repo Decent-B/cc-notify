@@ -6,6 +6,23 @@ event types (permission, idle, stop, generic). All calls are fire-and-forget;
 errors are logged but never propagated — a broken notification must not
 take down the webhook server.
 
+App identity
+  Windows identifies the sending application by its AUMID (Application User
+  Model ID). The default win11toast AUMID is 'Python', which makes every
+  notification header read "Python". We register a custom AUMID
+  (cc-notify.ClaudeCodeAgent) in HKCU on first use so notifications display
+  "Claude Code Agent" instead.  The registration is done lazily before the
+  first notification and cached for the session.
+
+Notification images
+  Each notification picks a random PNG from assets/notification_images/ and
+  shows it as a hero image (the banner below the notification body).  At
+  runtime the images are resolved via sys._MEIPASS when frozen by PyInstaller,
+  or from <repo>/assets/notification_images/ in development.
+
+  Recommended image dimensions: 364×180 px (2:1 landscape). Square images
+  work but Windows will centre-crop them to the hero aspect ratio.
+
 VS Code focus on click
   Toast notifications that carry a cwd field use a vscode:// URI as the
   on_click value (not a Python callable). When on_click is a string, win11toast
@@ -28,10 +45,19 @@ from __future__ import annotations
 
 import logging
 import os.path
+import random
+import sys
+import threading
 import urllib.parse
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# AUMID used to identify cc-notify to the Windows notification framework.
+# Registered in HKCU\Software\Classes\AppUserModelId\<_AUMID> on first use.
+_AUMID = "cc-notify.ClaudeCodeAgent"
+_DISPLAY_NAME = "Claude Code Agent"
 
 # WinRT system sound events used per notification type.
 _SOUNDS: dict[str, str] = {
@@ -44,6 +70,77 @@ _SOUNDS: dict[str, str] = {
 # Cached after first detection — wsl.exe is called at most once per session.
 _wsl2_default_distro: Optional[str] = None
 
+# Guards AUMID registration so it runs exactly once per process.
+_app_registered = False
+_app_registered_lock = threading.Lock()
+
+
+# ── App identity ──────────────────────────────────────────────────────────────
+
+def _ensure_app_registered() -> None:
+    """
+    Register cc-notify's AUMID in HKCU so Windows displays 'Claude Code Agent'
+    in notification headers instead of 'Python'.
+
+    Also calls SetCurrentProcessExplicitAppUserModelID so the OS associates
+    this process with the registered entry. Both operations are no-ops on
+    non-Windows platforms (e.g. WSL2 development).
+    """
+    global _app_registered
+    if _app_registered:
+        return
+    with _app_registered_lock:
+        if _app_registered:
+            return
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                import winreg
+                key_path = rf"Software\Classes\AppUserModelId\{_AUMID}"
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                    winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, _DISPLAY_NAME)
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(_AUMID)
+                logger.debug("Registered AUMID %s → %r", _AUMID, _DISPLAY_NAME)
+            except Exception as exc:
+                logger.warning("Could not register app AUMID: %s", exc)
+        _app_registered = True
+
+
+# ── Notification images ───────────────────────────────────────────────────────
+
+def _notification_image_dir() -> Path:
+    """
+    Return the directory containing notification hero images.
+
+    When frozen by PyInstaller, files from assets/notification_images/ are
+    extracted under sys._MEIPASS/notification_images/.  In development they
+    live at <repo_root>/assets/notification_images/.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "notification_images"  # type: ignore[attr-defined]
+    return Path(__file__).parent.parent / "assets" / "notification_images"
+
+
+def _random_image_uri() -> Optional[str]:
+    """
+    Pick a random PNG from the notification images directory and return a
+    file:// URI suitable for win11toast's image parameter, or None if no
+    images are available.
+    """
+    try:
+        images = list(_notification_image_dir().glob("*.png"))
+        if not images:
+            return None
+        chosen = random.choice(images)
+        # as_posix() converts backslashes to forward slashes on Windows:
+        # C:\path\to\file.png → file:///C:/path/to/file.png
+        return "file:///" + chosen.as_posix()
+    except Exception as exc:
+        logger.debug("Could not pick notification image: %s", exc)
+        return None
+
+
+# ── VS Code URI ───────────────────────────────────────────────────────────────
 
 def _get_default_wsl2_distro() -> Optional[str]:
     """
@@ -131,6 +228,8 @@ def _vscode_uri(cwd: str) -> Optional[str]:
         return f"vscode://file/{encoded}"
 
 
+# ── Core send ─────────────────────────────────────────────────────────────────
+
 def _send(
     title: str,
     body: str,
@@ -139,6 +238,7 @@ def _send(
     on_click=None,
 ) -> None:
     """Dispatch a single toast notification. Swallows all exceptions."""
+    _ensure_app_registered()
     try:
         from win11toast import notify  # imported lazily — not available outside Windows
 
@@ -148,11 +248,17 @@ def _send(
         if on_click is not None:
             kwargs["on_click"] = on_click
 
-        notify(title, body, **kwargs)
+        image_uri = _random_image_uri()
+        if image_uri:
+            kwargs["image"] = {"placement": "hero", "src": image_uri}
+
+        notify(title, body, app_id=_AUMID, **kwargs)
         logger.debug("Notification sent: %s", title)
     except Exception as exc:
         logger.warning("Failed to send notification: %s", exc)
 
+
+# ── Public notification functions ─────────────────────────────────────────────
 
 def permission(message: str, sound_enabled: bool = True, cwd: str = "") -> None:
     """Claude Code is paused waiting for the user to approve an action."""
@@ -193,6 +299,7 @@ def update_available(current: str, latest: str, releases_url: str, sound_enabled
     on_click is a URL string here (not a callable) because the target is a
     browser page, not VS Code.
     """
+    _ensure_app_registered()
     try:
         from win11toast import notify
 
@@ -200,10 +307,15 @@ def update_available(current: str, latest: str, releases_url: str, sound_enabled
         if sound_enabled:
             kwargs["audio"] = {"src": _SOUNDS["generic"]}
 
+        image_uri = _random_image_uri()
+        if image_uri:
+            kwargs["image"] = {"placement": "hero", "src": image_uri}
+
         notify(
             "cc-notify — Update Available",
             f"Version {latest} is available. You have {current}. Click to download.",
             on_click=releases_url,
+            app_id=_AUMID,
             **kwargs,
         )
         logger.debug("Update notification sent: %s -> %s", current, latest)

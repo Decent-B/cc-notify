@@ -17,7 +17,11 @@ a = Analysis(
     ["src/main.py"],
     pathex=["src"],
     binaries=[],
-    datas=collect_data_files("certifi"),
+    datas=collect_data_files("certifi") + [
+        # Notification hero images — resolved at runtime via _notification_image_dir().
+        # Dest dir "notification_images" maps to sys._MEIPASS/notification_images/.
+        ("assets/notification_images", "notification_images"),
+    ],
     hiddenimports=[
         # win11toast pulls in winsdk WinRT bindings dynamically.
         "winsdk",
