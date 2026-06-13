@@ -3,9 +3,20 @@ hooks_setup.py — Auto-configure Claude Code webhook hooks.
 
 Modifies ~/.claude/settings.json for:
   - Windows native Claude Code  (always attempted; cc-notify itself runs on Windows)
-  - WSL2 Claude Code            (attempted if wsl.exe is available and a distro is installed)
+  - WSL2 Claude Code            (attempted if wsl.exe is available and a distro exists)
 
-All public functions are thread-safe and do not mutate global state.
+Both environments receive:  http://localhost:<port>/webhook
+
+  Windows:  cc-notify and Claude Code for Windows run on the same machine,
+            so localhost is always correct.
+
+  WSL2:     WSL2 forwards localhost connections from inside the distro to the
+            Windows host by default (localhostForwarding = true in .wslconfig,
+            the factory default for both virtual-switch and mirrored-networking
+            modes).  If you have explicitly disabled localhost forwarding, edit
+            ~/.claude/settings.json inside WSL2 and replace 'localhost' with
+            your Windows host IP:
+              awk '/^nameserver/{print $2}' /etc/resolv.conf
 """
 from __future__ import annotations
 
@@ -83,34 +94,74 @@ def setup_windows(port: int) -> tuple[bool, Optional[str]]:
     """
     Merge webhook hooks into %USERPROFILE%\\.claude\\settings.json.
 
-    USERPROFILE is always set when the process runs as a native Windows
-    executable, so Path.home() is a reliable fallback.
-
     Returns (success, error_message_or_None).
     """
-    settings_path = (
-        Path(os.environ.get("USERPROFILE", "")) / ".claude" / "settings.json"
-        if os.environ.get("USERPROFILE")
-        else Path.home() / ".claude" / "settings.json"
-    )
+    userprofile = os.environ.get("USERPROFILE", "")
+    if userprofile:
+        settings_path = Path(userprofile) / ".claude" / "settings.json"
+    else:
+        # USERPROFILE is always set for a normal Windows user process; falling
+        # back to Path.home() handles edge cases like running from a service.
+        logger.warning("[Windows] USERPROFILE env var not set; falling back to Path.home()")
+        settings_path = Path.home() / ".claude" / "settings.json"
+
     webhook_url = f"http://localhost:{port}/webhook"
 
+    logger.info("[Windows] Settings file : %s", settings_path)
+    logger.info("[Windows] Webhook URL   : %s", webhook_url)
+
     try:
+        # Ensure the .claude directory exists
+        if not settings_path.parent.exists():
+            logger.info("[Windows] Creating directory: %s", settings_path.parent)
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Load any existing settings so we don't clobber unrelated keys
         existing: dict = {}
         if settings_path.exists():
+            logger.info("[Windows] File exists — reading current content")
             try:
                 existing = json.loads(settings_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                logger.warning("settings.json unreadable or malformed — starting fresh")
+                current_hooks = list(existing.get("hooks", {}).keys())
+                logger.info("[Windows] Hooks currently configured: %s",
+                            current_hooks if current_hooks else "(none)")
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "[Windows] settings.json is not valid JSON (%s) — "
+                    "existing content will be replaced", exc,
+                )
+            except OSError as exc:
+                logger.warning(
+                    "[Windows] Cannot read settings.json (%s) — "
+                    "will create a new file", exc,
+                )
+        else:
+            logger.info("[Windows] File not found — will create a new settings.json")
+
+        # Log which events will be overwritten vs added fresh
+        existing_hooks: set[str] = set(existing.get("hooks", {}).keys())
+        target_events = ["Notification", "Stop", "PermissionRequest"]
+        for event in target_events:
+            if event in existing_hooks:
+                logger.info("[Windows] Overwriting existing '%s' hook", event)
+            else:
+                logger.info("[Windows] Adding new '%s' hook", event)
 
         merged = _apply_hooks(existing, webhook_url)
+        logger.info("[Windows] Writing updated settings...")
         settings_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
-        logger.info("Windows hooks configured → %s", settings_path)
+        logger.info("[Windows] ✓ Done — hooks written to %s", settings_path)
         return True, None
+
+    except PermissionError as exc:
+        msg = f"Permission denied writing {settings_path}: {exc}"
+        logger.error("[Windows] ✗ %s", msg)
+        return False, msg
+    except OSError as exc:
+        logger.error("[Windows] ✗ OS error: %s", exc)
+        return False, str(exc)
     except Exception as exc:
-        logger.error("Windows setup error: %s", exc)
+        logger.error("[Windows] ✗ Unexpected error: %s", exc, exc_info=True)
         return False, str(exc)
 
 
@@ -118,92 +169,116 @@ def setup_windows(port: int) -> tuple[bool, Optional[str]]:
 
 def _wsl2_distros() -> list[str]:
     """
-    Return installed WSL2 distro names, or an empty list if WSL2 is unavailable.
+    Return installed WSL2 distro names, or [] if WSL2 is unavailable.
 
     wsl.exe --list --quiet outputs UTF-16 LE (with null bytes between chars)
-    on most Windows versions, so we decode it explicitly rather than relying on
-    the default system codec.
+    on most Windows versions, so we decode it explicitly rather than relying
+    on the default system codec.
     """
+    logger.info("[WSL2] Checking for wsl.exe...")
     try:
         result = subprocess.run(
             ["wsl.exe", "--list", "--quiet"],
             capture_output=True,
             timeout=10,
         )
-        if result.returncode != 0:
-            return []
-
-        raw = result.stdout
-        try:
-            text = raw.decode("utf-16-le")
-        except UnicodeDecodeError:
-            # Newer builds may output plain UTF-8.
-            text = raw.decode("utf-8", errors="ignore")
-
-        # Strip null characters left over from UTF-16 padding.
-        distros = [line.strip().replace("\x00", "") for line in text.splitlines()]
-        return [d for d in distros if d]
-
     except FileNotFoundError:
-        # wsl.exe not on PATH — WSL2 is not installed.
+        logger.info("[WSL2] wsl.exe not found — WSL2 is not installed or not on PATH")
         return []
     except subprocess.TimeoutExpired:
-        logger.warning("wsl.exe --list timed out")
+        logger.warning("[WSL2] wsl.exe --list timed out after 10 s")
         return []
 
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip() if result.stderr else ""
+        logger.info(
+            "[WSL2] wsl.exe --list returned code %d%s",
+            result.returncode,
+            f": {stderr}" if stderr else "",
+        )
+        return []
 
-def _wsl2_windows_host_ip(distro: Optional[str] = None) -> Optional[str]:
-    """
-    Ask a WSL2 distro for the Windows host IP address.
-
-    WSL2 always lists the Windows host as the nameserver in /etc/resolv.conf.
-    On Windows 11 with mirrored-networking, 'host.docker.internal' also works,
-    but the resolv.conf method is universally available across all WSL2 versions.
-    """
-    cmd = ["wsl.exe"]
-    if distro:
-        cmd += ["--distribution", distro]
-    cmd += ["--", "awk", "/^nameserver/ {print $2; exit}", "/etc/resolv.conf"]
-
+    raw = result.stdout
+    # Try UTF-16 LE first (the predominant encoding); fall back to UTF-8
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        ip = result.stdout.strip()
-        return ip if ip else None
-    except (subprocess.TimeoutExpired, OSError):
-        return None
+        text = raw.decode("utf-16-le")
+        logger.debug("[WSL2] Decoded distro list as UTF-16 LE")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="ignore")
+        logger.debug("[WSL2] Decoded distro list as UTF-8 (fallback)")
+
+    # Strip null bytes left over from UTF-16 padding
+    distros = [line.strip().replace("\x00", "") for line in text.splitlines()]
+    distros = [d for d in distros if d]
+
+    if distros:
+        logger.info("[WSL2] Found %d distro(s): %s", len(distros), distros)
+    else:
+        logger.info("[WSL2] wsl.exe responded but listed no distros")
+
+    return distros
 
 
 # ── WSL2 setup ────────────────────────────────────────────────────────────────
 
-# This script runs *inside* the WSL2 distro via stdin.  Using stdin sidesteps
-# all shell-quoting issues — the webhook URL is passed as argv[1] so it never
-# needs to be embedded in source code or escaped through multiple shell layers.
+# This script runs inside the WSL2 distro via stdin so the webhook URL is
+# passed as argv[1] and never needs to be shell-escaped or embedded in source.
+# All print() calls are captured by the caller and forwarded to the logger.
 _WSL_SETUP_SCRIPT = """\
 import json, os, sys
 
 webhook_url = sys.argv[1]
 path = os.path.expanduser("~/.claude/settings.json")
-os.makedirs(os.path.dirname(path), exist_ok=True)
+settings_dir = os.path.dirname(path)
 
-try:
-    with open(path) as f:
-        settings = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    settings = {}
+print(f"target    : {path}", flush=True)
+print(f"url       : {webhook_url}", flush=True)
 
+# Ensure ~/.claude/ exists
+if not os.path.exists(settings_dir):
+    os.makedirs(settings_dir, exist_ok=True)
+    print(f"created   : {settings_dir}", flush=True)
+else:
+    print(f"directory : {settings_dir} (exists)", flush=True)
+
+# Load existing settings
+settings = {}
+if os.path.exists(path):
+    print("file      : exists, reading...", flush=True)
+    try:
+        with open(path, encoding="utf-8") as f:
+            settings = json.load(f)
+        existing_hooks = list(settings.get("hooks", {}).keys())
+        print(f"current hooks: {existing_hooks if existing_hooks else '(none)'}", flush=True)
+    except json.JSONDecodeError as exc:
+        print(f"warning   : malformed JSON ({exc}) — starting fresh", flush=True)
+        settings = {}
+    except OSError as exc:
+        print(f"warning   : cannot read file ({exc}) — starting fresh", flush=True)
+        settings = {}
+else:
+    print("file      : not found — will create new settings.json", flush=True)
+
+# Build and merge hooks
 block = {"hooks": [{"type": "http", "url": webhook_url, "async": True}]}
 if "hooks" not in settings:
     settings["hooks"] = {}
-settings["hooks"].update({
-    "Notification":      [block],
-    "Stop":              [block],
-    "PermissionRequest": [block],
-})
 
-with open(path, "w") as f:
-    json.dump(settings, f, indent=2)
+target_events = ["Notification", "Stop", "PermissionRequest"]
+for event in target_events:
+    action = "overwriting" if event in settings["hooks"] else "adding"
+    print(f"{action:9} : '{event}' hook", flush=True)
+settings["hooks"].update({e: [block] for e in target_events})
 
-print("configured:", path)
+# Write updated settings
+try:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+    print(f"written   : {path}", flush=True)
+    print(f"hooks set : {list(settings['hooks'].keys())}", flush=True)
+except OSError as exc:
+    print(f"error     : cannot write {path}: {exc}", file=sys.stderr, flush=True)
+    sys.exit(1)
 """
 
 
@@ -211,43 +286,62 @@ def setup_wsl2(port: int, distro: Optional[str] = None) -> tuple[bool, Optional[
     """
     Configure Claude Code hooks inside a WSL2 distro.
 
-    Steps:
-      1. Determine the Windows host IP as seen from inside the distro.
-      2. Run _WSL_SETUP_SCRIPT via stdin so the webhook URL is never
-         shell-interpolated (wsl.exe passes stdin directly to python3).
+    Sends _WSL_SETUP_SCRIPT to python3 via stdin so the webhook URL is never
+    shell-interpolated.  Uses 'localhost' as the webhook host — WSL2 forwards
+    localhost connections from inside the distro to the Windows host by default.
 
     Returns (success, error_message_or_None).
     """
-    host_ip = _wsl2_windows_host_ip(distro)
-    if not host_ip:
-        return False, "Could not determine Windows host IP from inside WSL2"
+    label = distro or "(default distro)"
+    webhook_url = f"http://localhost:{port}/webhook"
 
-    webhook_url = f"http://{host_ip}:{port}/webhook"
+    logger.info("[WSL2:%s] Configuring hooks", label)
+    logger.info("[WSL2:%s] Webhook URL: %s", label, webhook_url)
+    logger.info(
+        "[WSL2:%s] Using 'localhost' — WSL2 forwards this to the Windows host "
+        "via localhostForwarding (enabled by default). If you have disabled "
+        "localhost forwarding in .wslconfig, manually replace 'localhost' with "
+        "your Windows host IP in ~/.claude/settings.json inside the distro.",
+        label,
+    )
 
     cmd = ["wsl.exe"]
     if distro:
         cmd += ["--distribution", distro]
-    # python3 - reads the script from stdin; argv[1] carries the webhook URL.
+    # python3 -  reads the script from stdin; argv[1] carries the webhook URL.
     cmd += ["--", "python3", "-", webhook_url]
+    logger.info("[WSL2:%s] Running: %s", label, " ".join(cmd))
 
     try:
         result = subprocess.run(
             cmd,
-            input=_WSL_SETUP_SCRIPT.encode("utf-8"),
+            input=_WSL_SETUP_SCRIPT,   # text=True → pass str, not bytes
             capture_output=True,
             text=True,
             timeout=30,
         )
+
+        # Forward every line of the embedded script's output to our logger
+        if result.stdout:
+            for line in result.stdout.strip().splitlines():
+                logger.info("[WSL2:%s] %s", label, line)
+        if result.stderr:
+            for line in result.stderr.strip().splitlines():
+                logger.warning("[WSL2:%s] stderr: %s", label, line)
+
         if result.returncode != 0:
             error = result.stderr.strip() or f"exit code {result.returncode}"
-            logger.error("WSL2 setup failed (%s): %s", distro or "default", error)
+            logger.error("[WSL2:%s] ✗ Setup failed: %s", label, error)
             return False, error
 
-        logger.info("WSL2 hooks configured (%s): %s", distro or "default", result.stdout.strip())
+        logger.info("[WSL2:%s] ✓ Hooks configured successfully", label)
         return True, None
+
     except subprocess.TimeoutExpired:
+        logger.error("[WSL2:%s] ✗ Command timed out after 30 s", label)
         return False, "WSL2 command timed out (30 s)"
     except OSError as exc:
+        logger.error("[WSL2:%s] ✗ OS error launching wsl.exe: %s", label, exc)
         return False, str(exc)
 
 
@@ -259,20 +353,43 @@ def setup_all(port: int) -> SetupResult:
 
     Windows is always configured.  WSL2 is configured if wsl.exe is reachable
     and at least one distro is installed — only the default (first) distro is
-    targeted; users with multiple distros can run setup-hooks.sh manually.
+    targeted; users with multiple distros can run scripts/setup-hooks.sh
+    manually inside each additional distro.
 
     This function may take several seconds when WSL2 is present (subprocess
     round-trips to the distro).  Call it from a background thread.
     """
+    logger.info("=== cc-notify hook setup starting (port %d) ===", port)
     result = SetupResult()
 
+    # ── Step 1/2: Windows ────────────────────────────────────────────────────
+    logger.info("--- [1/2] Windows Claude Code ---")
     result.windows_ok, result.windows_error = setup_windows(port)
+    if result.windows_ok:
+        logger.info("[1/2] Windows ✓")
+    else:
+        logger.error("[1/2] Windows ✗ — %s", result.windows_error)
 
+    # ── Step 2/2: WSL2 ───────────────────────────────────────────────────────
+    logger.info("--- [2/2] WSL2 Claude Code ---")
     distros = _wsl2_distros()
     result.wsl2_available = bool(distros)
 
-    if distros:
+    if not distros:
+        logger.info("[2/2] No WSL2 distros found — skipping WSL2 configuration")
+    else:
         result.wsl2_distro = distros[0]
-        result.wsl2_ok, result.wsl2_error = setup_wsl2(port, distros[0])
+        if len(distros) > 1:
+            logger.info(
+                "[2/2] %d distros found: %s — configuring '%s' only. "
+                "Run scripts/setup-hooks.sh inside any other distro manually.",
+                len(distros), distros, result.wsl2_distro,
+            )
+        result.wsl2_ok, result.wsl2_error = setup_wsl2(port, result.wsl2_distro)
+        if result.wsl2_ok:
+            logger.info("[2/2] WSL2 (%s) ✓", result.wsl2_distro)
+        else:
+            logger.error("[2/2] WSL2 (%s) ✗ — %s", result.wsl2_distro, result.wsl2_error)
 
+    logger.info("=== Hook setup complete: %s ===", result.summary())
     return result

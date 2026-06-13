@@ -2,13 +2,20 @@
 # setup-hooks.sh — Configure Claude Code hooks from inside WSL2.
 #
 # Run this script from WITHIN your WSL2 distro after cc-notify.exe is running
-# on the Windows side. It detects the Windows host IP automatically and writes
-# the webhook URL into ~/.claude/settings.json.
+# on the Windows side. It writes the webhook URL into ~/.claude/settings.json.
+#
+# Webhook host strategy
+#   WSL2 forwards localhost connections from inside the distro to the Windows
+#   host by default (localhostForwarding = true in .wslconfig, the factory
+#   default). So 'localhost' is used unless CC_NOTIFY_HOST is set.
+#   If you have disabled localhost forwarding, override the host:
+#     CC_NOTIFY_HOST=$(awk '/^nameserver/{print $2}' /etc/resolv.conf)
 #
 # Usage:
-#   bash scripts/setup-hooks.sh               # auto-detect host IP, port 9876
-#   CC_NOTIFY_PORT=9999 bash setup-hooks.sh   # custom port
-#   bash setup-hooks.sh --dry-run             # print config without writing
+#   bash scripts/setup-hooks.sh                # localhost:9876 (default)
+#   CC_NOTIFY_PORT=9999 bash setup-hooks.sh    # custom port
+#   CC_NOTIFY_HOST=172.20.0.1 bash setup-hooks.sh  # explicit Windows host IP
+#   bash setup-hooks.sh --dry-run              # print config without writing
 
 set -euo pipefail
 
@@ -21,81 +28,94 @@ done
 
 SETTINGS="$HOME/.claude/settings.json"
 
-# ── Detect the Windows host IP ────────────────────────────────────────────────
+# ── Determine webhook host ─────────────────────────────────────────────────────
 
-detect_windows_host() {
-  # 1. Try host.docker.internal — available on Windows 11 WSL2 with mirrored
-  #    networking or Docker Desktop installed.
-  if getent hosts host.docker.internal &>/dev/null; then
-    echo "host.docker.internal"
-    return
-  fi
-
-  # 2. Fall back to the DNS nameserver from /etc/resolv.conf — the WSL2
-  #    virtual gateway always points to the Windows host.
-  awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf
-}
-
-if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
-  HOST_IP=$(detect_windows_host)
-  WEBHOOK_URL="http://${HOST_IP}:${PORT}/webhook"
-  echo "WSL2 detected. Windows host: ${HOST_IP}"
+if [[ -n "${CC_NOTIFY_HOST:-}" ]]; then
+  # Explicit override — use exactly what the user provided.
+  HOST="$CC_NOTIFY_HOST"
+  echo "Host (CC_NOTIFY_HOST): $HOST"
+elif grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
+  # WSL2: localhost forwards to the Windows host by default.
+  HOST="localhost"
+  echo "WSL2 detected. Using localhost (WSL2 localhost forwarding)."
+  echo "If toasts do not appear, set CC_NOTIFY_HOST to your Windows host IP:"
+  echo "  CC_NOTIFY_HOST=\$(awk '/^nameserver/{print \$2}' /etc/resolv.conf)"
 else
-  WEBHOOK_URL="http://localhost:${PORT}/webhook"
-  echo "Native Linux detected."
+  # Native Linux — cc-notify is a Windows app and cannot run here, but support
+  # native setups in case the user proxies notifications through a remote host.
+  HOST="localhost"
+  echo "Native Linux detected. Using localhost."
 fi
 
-echo "Webhook URL: ${WEBHOOK_URL}"
+WEBHOOK_URL="http://${HOST}:${PORT}/webhook"
+echo "Webhook URL: $WEBHOOK_URL"
+echo "Settings   : $SETTINGS"
 
 if $DRY_RUN; then
   echo ""
-  echo "[dry-run] Would write to: ${SETTINGS}"
-  echo "[dry-run] Webhook URL   : ${WEBHOOK_URL}"
+  echo "[dry-run] Would write the above URL to: $SETTINGS"
+  echo "[dry-run] No files were modified."
   exit 0
 fi
 
-# ── Merge into settings.json using Python (avoids jq dependency) ─────────────
+# ── Merge into settings.json using Python (avoids jq dependency) ──────────────
 
 mkdir -p "$(dirname "$SETTINGS")"
 
 python3 - "$SETTINGS" "$WEBHOOK_URL" <<'PYEOF'
-import json, sys
+import json, os, sys
 
 settings_path = sys.argv[1]
 webhook_url   = sys.argv[2]
 
-try:
-    with open(settings_path) as f:
-        settings = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    settings = {}
+print(f"target: {settings_path}")
+print(f"url:    {webhook_url}")
 
+# Load existing settings, if any
+settings = {}
+if os.path.exists(settings_path):
+    print("file exists, reading...")
+    try:
+        with open(settings_path, encoding="utf-8") as f:
+            settings = json.load(f)
+        existing_hooks = list(settings.get("hooks", {}).keys())
+        print(f"current hooks: {existing_hooks if existing_hooks else '(none)'}")
+    except json.JSONDecodeError as exc:
+        print(f"warning: malformed JSON ({exc}) — starting fresh")
+        settings = {}
+    except OSError as exc:
+        print(f"warning: cannot read file ({exc}) — starting fresh")
+        settings = {}
+else:
+    print("file not found — will create new settings.json")
+
+# Build and merge hook entries
 hook_entry = {"type": "http", "url": webhook_url, "async": True}
 hook_group = {"hooks": [hook_entry]}
 
-new_hooks = {
-    "Notification":      [hook_group],
-    "Stop":              [hook_group],
-    "PermissionRequest": [hook_group],
-}
-
+target_events = ["Notification", "Stop", "PermissionRequest"]
 if "hooks" not in settings:
     settings["hooks"] = {}
 
-for event, cfg in new_hooks.items():
-    if event in settings["hooks"]:
-        print(f"  (overwriting existing '{event}' hooks)")
-    settings["hooks"][event] = cfg
+for event in target_events:
+    action = "overwriting" if event in settings["hooks"] else "adding"
+    print(f"{action}: '{event}' hook")
+    settings["hooks"][event] = [hook_group]
 
-with open(settings_path, "w") as f:
-    json.dump(settings, f, indent=2)
-
-print(f"Settings written to {settings_path}")
+# Write back
+try:
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+    print(f"written: {settings_path}")
+    print(f"hooks set: {list(settings['hooks'].keys())}")
+except OSError as exc:
+    print(f"error: cannot write {settings_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
 PYEOF
 
 echo ""
 echo "✅  Claude Code hooks configured."
-echo "    Webhook URL : ${WEBHOOK_URL}"
+echo "    Webhook URL : $WEBHOOK_URL"
 echo "    Events      : Notification, Stop, PermissionRequest"
 echo ""
 echo "    Restart Claude Code for changes to take effect."
