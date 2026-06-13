@@ -1,4 +1,4 @@
-# Python
+# Python bytecode
 __pycache__/
 *.pyc
 *.pyo
@@ -6,21 +6,19 @@ __pycache__/
 .Python
 *.egg-info/
 .eggs/
-dist/
-build/
 *.spec.bak
 
-# PyInstaller build artefacts (everything except build.spec)
+# PyInstaller output — dist/ and build/ are regenerated; build.spec is tracked
 dist/
 build/
 *.manifest
 
-# Virtual environments
+# uv / pip virtual environments
 .venv/
 venv/
 env/
 
-# Generated icon (rebuilt by CI from scripts/create_icon.py)
+# Generated icon — rebuilt before each PyInstaller run by scripts/create_icon.py
 assets/icon.ico
 
 # IDE
