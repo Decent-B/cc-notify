@@ -12,7 +12,7 @@ import logging
 import sys
 import threading
 import webbrowser
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from config import Config
@@ -20,6 +20,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _GITHUB_URL = "https://github.com/Decent-B/cc-notify"
+
+# The running tray icon — set inside run_tray() so trigger_install_update()
+# can stop it cleanly from a background thread.
+_icon: Optional[object] = None
 
 
 # ── Icon ──────────────────────────────────────────────────────────────────────
@@ -58,27 +62,20 @@ def _build_icon_image():
 def _run_update_check(config: "Config") -> None:
     """
     Query GitHub for the latest release and notify the user of the result.
-    Runs on a daemon thread so the network call never blocks the tray loop.
+    Stores a pending ReleaseInfo when an update is found so the tray menu can
+    offer a one-click install item.  Runs on a daemon thread.
     """
     import notifier
-    from updater import RELEASES_URL, check_for_update
+    from updater import INSTALL_URI, fetch_latest_release, set_pending_release
     from version import __version__
 
     try:
-        available, latest, error = check_for_update()
-
-        if available:
+        release = fetch_latest_release()
+        if release:
+            set_pending_release(release)
             notifier.update_available(
-                __version__, latest, RELEASES_URL,
+                __version__, release.tag, INSTALL_URI,
                 sound_enabled=config.sound_enabled,
-            )
-        elif error:
-            # Show the specific error so users can diagnose the problem
-            # instead of seeing a generic "check your internet" message.
-            notifier.generic(
-                "cc-notify — Update Check Failed",
-                error,
-                sound_enabled=False,
             )
         else:
             notifier.generic(
@@ -86,12 +83,15 @@ def _run_update_check(config: "Config") -> None:
                 f"You are running the latest version ({__version__}).",
                 sound_enabled=False,
             )
-
     except Exception as exc:
         logger.error("Update check crashed: %s", exc, exc_info=True)
         try:
             import notifier as _n
-            _n.generic("Update check failed", str(exc), sound_enabled=False)
+            _n.generic(
+                "cc-notify — Update Check Failed",
+                str(exc),
+                sound_enabled=False,
+            )
         except Exception:
             pass
 
@@ -155,6 +155,29 @@ def _run_hook_setup(config: "Config", *, auto: bool = False) -> None:
             pass
 
 
+def _run_install_update(config: "Config") -> None:
+    """
+    Download and apply the pending release, then stop the tray so the process
+    exits and the PowerShell helper script can swap the EXE.
+    """
+    import notifier
+    from updater import apply_update, get_pending_release
+
+    release = get_pending_release()
+    if not release:
+        logger.warning("No pending release to install")
+        return
+
+    def notify_fn(title: str, body: str) -> None:
+        notifier.generic(title, body, sound_enabled=False)
+
+    def stop_icon_fn() -> None:
+        if _icon is not None:
+            _icon.stop()  # type: ignore[attr-defined]
+
+    apply_update(release, notify_fn=notify_fn, stop_icon_fn=stop_icon_fn)
+
+
 def maybe_run_auto_setup(config: "Config") -> None:
     """
     Trigger hook setup in a background thread if this version has not yet
@@ -183,19 +206,33 @@ def maybe_run_auto_setup(config: "Config") -> None:
     ).start()
 
 
+def trigger_install_update(config: "Config") -> None:
+    """
+    Start the update install in a daemon thread.  Called from the tray menu
+    or from the /do-update server endpoint.  Safe to call from any thread.
+    """
+    threading.Thread(
+        target=_run_install_update,
+        args=(config,),
+        daemon=True,
+        name="install-update",
+    ).start()
+
+
 # ── Tray ──────────────────────────────────────────────────────────────────────
 
 def run_tray(config: "Config") -> None:
     """
-    Start the system tray icon.  Blocks until the user selects Exit.
+    Start the system tray icon.  Blocks until the user selects Exit or the
+    icon is stopped programmatically (e.g. by the self-update flow).
     Must be called from the main thread.
     """
     import pystray
+    global _icon
 
     icon_image = _build_icon_image()
 
     def on_setup_hooks(icon, item):
-        # Spawn a daemon thread so WSL2 subprocess calls don't stall the tray.
         threading.Thread(
             target=_run_hook_setup,
             args=(config,),
@@ -211,6 +248,9 @@ def run_tray(config: "Config") -> None:
             name="update-check",
         ).start()
 
+    def on_install_update(icon, item):
+        trigger_install_update(config)
+
     def on_open_github(icon, item):
         webbrowser.open(_GITHUB_URL)
 
@@ -219,17 +259,28 @@ def run_tray(config: "Config") -> None:
         icon.stop()
         sys.exit(0)
 
-    menu = pystray.Menu(
-        pystray.MenuItem("Claude Code Notifier", None, enabled=False),
-        pystray.MenuItem(f"Listening on :{config.port}", None, enabled=False),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Setup Claude Code Hooks…", on_setup_hooks),
-        pystray.MenuItem("Check for Updates", on_check_updates),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Open GitHub", on_open_github),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Exit", on_exit),
-    )
+    def _build_menu():
+        from updater import get_pending_release
+        items = [
+            pystray.MenuItem("Claude Code Notifier", None, enabled=False),
+            pystray.MenuItem(f"Listening on :{config.port}", None, enabled=False),
+            pystray.Menu.SEPARATOR,
+        ]
+        pending = get_pending_release()
+        if pending:
+            items.append(pystray.MenuItem(f"Install Update {pending.tag}", on_install_update))
+            items.append(pystray.Menu.SEPARATOR)
+        items += [
+            pystray.MenuItem("Setup Claude Code Hooks…", on_setup_hooks),
+            pystray.MenuItem("Check for Updates", on_check_updates),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Open GitHub", on_open_github),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Exit", on_exit),
+        ]
+        return items
+
+    menu = pystray.Menu(_build_menu)
 
     icon = pystray.Icon(
         name="cc-notify",
@@ -237,6 +288,7 @@ def run_tray(config: "Config") -> None:
         title=f"Claude Code Notifier  |  :{config.port}",
         menu=menu,
     )
+    _icon = icon
 
     def _make_visible(icon):
         icon.visible = True
