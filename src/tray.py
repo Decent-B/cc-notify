@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_GITHUB_URL = "https://github.com/Decent-Cypher/ai-notification"
+_GITHUB_URL = "https://github.com/Decent-B/cc-notify"
 
 
 # ── Icon ──────────────────────────────────────────────────────────────────────

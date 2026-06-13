@@ -115,7 +115,7 @@ builds user confidence.
 Scoop is a command-line installer for Windows, popular with developers:
 
 ```powershell
-scoop bucket add cc-notify https://github.com/Decent-Cypher/scoop-cc-notify
+scoop bucket add cc-notify https://github.com/Decent-B/scoop-cc-notify
 scoop install cc-notify
 ```
 
@@ -134,7 +134,7 @@ Submit a manifest to
 install with:
 
 ```powershell
-winget install Decent-Cypher.cc-notify
+winget install Decent-B.cc-notify
 ```
 
 Use `winget-create new <release-url>` to generate the manifest YAML, then open
@@ -148,18 +148,20 @@ reduce the false positive rate before submitting.
 
 ## Auto-Update
 
-cc-notify currently does **not** have an in-app auto-updater. The recommended
-workflow:
+cc-notify includes a lightweight in-app update checker. When the user selects
+**"Check for Updates"** from the system tray menu, the app queries:
 
-1. The app checks `https://api.github.com/repos/Decent-Cypher/ai-notification/releases/latest`
-   at startup.
-2. If a newer version is available, it shows a toast notification with a link
-   to the releases page.
-3. The user downloads and re-runs the new EXE manually.
+```
+https://api.github.com/repos/Decent-B/cc-notify/releases/latest
+```
 
-This is implemented in approximately 20 lines and avoids dependency on
-WinSparkle or Clowd.Squirrel for this early stage. If you want to add it, see
-[PyWinSparkle on PyPI](https://pypi.org/project/pywinsparkle/).
+If a newer version is available it shows a clickable toast notification —
+clicking the toast opens the releases page in the browser. The user downloads
+and runs the new EXE manually; no silent background updates occur.
+
+The implementation lives in `src/updater.py` and uses only the Python standard
+library (`urllib`, `json`, `ssl`) plus `certifi` for reliable TLS certificate
+verification inside the PyInstaller bundle.
 
 ---
 

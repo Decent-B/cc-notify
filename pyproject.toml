@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-notify"
-version = "0.1.1"
+version = "0.1.4"
 description = "Windows tray app that sends native notifications for Claude Code events"
 readme = "README.md"
 license = { text = "MIT" }
@@ -31,9 +31,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage   = "https://github.com/Decent-Cypher/ai-notification"
-Repository = "https://github.com/Decent-Cypher/ai-notification"
-Issues     = "https://github.com/Decent-Cypher/ai-notification/issues"
+Homepage   = "https://github.com/Decent-B/cc-notify"
+Repository = "https://github.com/Decent-B/cc-notify"
+Issues     = "https://github.com/Decent-B/cc-notify/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -41,7 +41,7 @@ of your screen and persists in Notification Center.
 
 ### Step 1 — Download cc-notify
 
-Go to the [**Releases**](https://github.com/Decent-Cypher/ai-notification/releases)
+Go to the [**Releases**](https://github.com/Decent-B/cc-notify/releases)
 page and download the latest `cc-notify-<version>-windows-x64.exe`.
 
 > **SmartScreen warning?**
@@ -190,8 +190,8 @@ Two development setups are supported.
 # Install uv
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
-git clone https://github.com/Decent-Cypher/ai-notification.git
-cd ai-notification
+git clone https://github.com/Decent-B/cc-notify.git
+cd cc-notify
 
 # Install runtime dependencies (does not install cc-notify as a package)
 uv sync --no-install-project
@@ -231,8 +231,8 @@ powershell.exe -ExecutionPolicy ByPass \
 **Clone and develop normally in WSL2:**
 
 ```bash
-git clone https://github.com/Decent-Cypher/ai-notification.git
-cd ai-notification
+git clone https://github.com/Decent-B/cc-notify.git
+cd cc-notify
 
 # Edit code with your WSL2 editor (VS Code, Neovim, etc.)
 # All git operations work as normal from WSL2.

@@ -18,7 +18,7 @@ from version import __version__
 
 logger = logging.getLogger(__name__)
 
-_REPO        = "Decent-Cypher/ai-notification"
+_REPO        = "Decent-B/cc-notify"
 _API_URL     = f"https://api.github.com/repos/{_REPO}/releases/latest"
 RELEASES_URL = f"https://github.com/{_REPO}/releases"
 
