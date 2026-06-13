@@ -52,6 +52,8 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
+from messages import IDLE_MESSAGES, PERMISSION_MESSAGES, STOP_MESSAGES
+
 logger = logging.getLogger(__name__)
 
 # AUMID used to identify cc-notify to the Windows notification framework.
@@ -260,20 +262,28 @@ def _send(
 
 # ── Public notification functions ─────────────────────────────────────────────
 
+def _pick(pool: list[str]) -> str:
+    """Return a random entry from pool, falling back to pool[0] on error."""
+    try:
+        return random.choice(pool)
+    except Exception:
+        return pool[0]
+
+
 def permission(message: str, sound_enabled: bool = True, cwd: str = "") -> None:
     """Claude Code is paused waiting for the user to approve an action."""
-    body = message or "Claude Code is waiting for your approval to proceed."
     _send(
-        "Claude Code — Permission Required", body, "permission", sound_enabled,
+        "Claude Code — Permission Required", _pick(PERMISSION_MESSAGES),
+        "permission", sound_enabled,
         on_click=_vscode_uri(cwd),
     )
 
 
 def idle(message: str, sound_enabled: bool = True, cwd: str = "") -> None:
     """Claude Code is idle and waiting for the user to respond."""
-    body = message or "Claude Code is waiting for your response."
     _send(
-        "Claude Code — Waiting for Input", body, "idle", sound_enabled,
+        "Claude Code — Waiting for Input", _pick(IDLE_MESSAGES),
+        "idle", sound_enabled,
         on_click=_vscode_uri(cwd),
     )
 
@@ -281,7 +291,8 @@ def idle(message: str, sound_enabled: bool = True, cwd: str = "") -> None:
 def stop(sound_enabled: bool = True, cwd: str = "") -> None:
     """Claude Code has finished generating a response."""
     _send(
-        "Claude Code — Task Complete", "Claude has finished responding.", "stop", sound_enabled,
+        "Claude Code — Task Complete", _pick(STOP_MESSAGES),
+        "stop", sound_enabled,
         on_click=_vscode_uri(cwd),
     )
 
