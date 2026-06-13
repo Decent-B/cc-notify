@@ -67,6 +67,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
 
   Set-Location '${WIN_PATH}'
 
+  # The uv cache lives on the Windows C: drive while the .venv target is on
+  # the WSL2 filesystem — hardlinks can't cross filesystems, so force copy mode.
+  \$env:UV_LINK_MODE = 'copy'
+
   Write-Host '>>> Installing dependencies'
   uv sync --group dev --no-install-project
 

@@ -65,9 +65,14 @@ bash "${REPO_ROOT}/scripts/build-windows.sh"
 
 section "2/5  Launch"
 
-# Stop any existing instance so the port is free before starting the new EXE.
+# Stop any existing instance so the port is free.
+# Pipeline idiom is required: Stop-Process with -ErrorAction SilentlyContinue
+# still sets $? to False in Windows PowerShell 5.1 when the process doesn't
+# exist, causing PowerShell to exit 1 and bash's set -e to kill the script.
+# Piping through Get-Process means Stop-Process receives no input (a no-op
+# that succeeds), keeping $? True and the exit code 0.
 powershell.exe -NoProfile -Command \
-  "Stop-Process -Name 'cc-notify' -ErrorAction SilentlyContinue"
+  "Get-Process -Name 'cc-notify' -ErrorAction SilentlyContinue | Stop-Process"
 sleep 1
 
 powershell.exe -NoProfile -Command \
