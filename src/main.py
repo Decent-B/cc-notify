@@ -2,7 +2,7 @@
 cc-notify — Claude Code Windows Notifier
 Entry point for the PyInstaller-bundled tray application.
 
-Startup sequence:
+Normal startup sequence:
   1. Load config from %APPDATA%/cc-notify/config.json
   2. Ensure the per-install webhook token exists in state.json
   3. Check the webhook port is free (single-instance guard)
@@ -10,6 +10,13 @@ Startup sequence:
   5. Auto-configure Claude Code hooks if this version hasn't done so yet
      (first install or post-update launch) — runs in a background thread
   6. Hand control to the pystray tray icon (blocks until Exit)
+
+Protocol handler mode (cc-notify:// URI):
+  When Windows activates the app via the cc-notify:// URI scheme (i.e. the
+  user clicked an update toast), the process receives the URI as argv[1].
+  In that case the startup sequence above is skipped entirely — the process
+  reads the stored token, sends GET /do-update to the running instance, and
+  exits immediately.
 """
 from __future__ import annotations
 
@@ -17,6 +24,7 @@ import logging
 import socket
 import sys
 import threading
+import time
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,11 +47,65 @@ def _start_server(app, host: str, port: int) -> None:
     serve(app, host=host, port=port, threads=4)
 
 
+def _handle_protocol_uri(uri: str) -> None:
+    """
+    Handle a cc-notify:// URI activation.
+
+    Reads the stored webhook token and port, sends GET /do-update to the
+    running tray instance, then exits.  This process is intentionally
+    short-lived — its only job is to signal the running instance.
+    """
+    import json
+    import os
+    import urllib.error
+    import urllib.request
+    from pathlib import Path
+
+    appdata = Path(os.environ.get("APPDATA", Path.home()))
+    config_dir = appdata / "cc-notify"
+
+    try:
+        port = json.loads(
+            (config_dir / "config.json").read_text(encoding="utf-8")
+        ).get("port", 9876)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        port = 9876
+
+    try:
+        state = json.loads(
+            (config_dir / "state.json").read_text(encoding="utf-8")
+        )
+        token = state.get("webhook_token", "")
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        token = ""
+
+    if not token:
+        logger.warning("Protocol handler: no webhook token found in state.json")
+        sys.exit(1)
+
+    url = f"http://127.0.0.1:{port}/do-update?token={token}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            logger.debug("Protocol handler: /do-update response %d", resp.status)
+    except urllib.error.HTTPError as exc:
+        logger.warning("Protocol handler: /do-update returned HTTP %d", exc.code)
+    except Exception as exc:
+        logger.warning("Protocol handler: could not reach running instance: %s", exc)
+
+    sys.exit(0)
+
+
 def main() -> None:
+    # Handle cc-notify:// URI activations before normal startup.
+    # Windows passes the full URI (e.g. cc-notify://install) as argv[1].
+    if len(sys.argv) > 1 and sys.argv[1].startswith("cc-notify://"):
+        _handle_protocol_uri(sys.argv[1])
+        return
+
     from config import Config
     from server import create_app
     from state import ensure_webhook_token
-    from tray import maybe_run_auto_setup, run_tray
+    from tray import maybe_run_auto_setup, run_tray, trigger_install_update
 
     config = Config.load()
 
@@ -51,9 +113,19 @@ def main() -> None:
     # there is no race between generation (main thread) and reads (other threads).
     webhook_token = ensure_webhook_token()
 
-    if _port_in_use(config.port):
+    # Allow a brief grace period for post-update restarts: the PowerShell
+    # helper script starts the new EXE immediately after the old process dies,
+    # and the OS may not have released the socket by then.  Retry for up to
+    # three seconds before concluding a real conflict exists.
+    for _attempt in range(4):
+        if not _port_in_use(config.port):
+            break
+        if _attempt == 0:
+            logger.info("Port %d in use, waiting for it to be released…", config.port)
+        time.sleep(1)
+    else:
         logger.error(
-            "Port %d is already in use — another cc-notify instance may be running.",
+            "Port %d is still in use — another cc-notify instance may be running.",
             config.port,
         )
         try:
@@ -68,7 +140,11 @@ def main() -> None:
             pass
         sys.exit(1)
 
-    app = create_app(config, webhook_token)
+    app = create_app(
+        config,
+        webhook_token,
+        on_do_update=lambda: trigger_install_update(config),
+    )
 
     server_thread = threading.Thread(
         # Bind only to the loopback interface.  Claude Code on native Windows and
