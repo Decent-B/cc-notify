@@ -7,8 +7,8 @@ settings.json), so the server always returns 200 immediately — Claude Code doe
 not wait for the response.
 
 Authentication
-  Every request to /webhook must carry the per-install secret token as a query
-  parameter: POST /webhook?token=<value>
+  Every request to /webhook and GET /do-update must carry the per-install
+  secret token as a query parameter: ?token=<value>
   The token is generated at first launch, stored in state.json, and embedded
   in the hook URL written to Claude Code's settings.json during setup.
   Requests without a valid token are rejected with 403 before any processing.
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hmac
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 from flask import Flask, jsonify, request
 
@@ -30,13 +30,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def create_app(config: "Config", webhook_token: str) -> Flask:
+def create_app(
+    config: "Config",
+    webhook_token: str,
+    on_do_update: Optional[Callable[[], None]] = None,
+) -> Flask:
     """
     Build the Flask application.
 
-    webhook_token — the per-install secret that every /webhook request must
-    supply as ?token=<value>.  Requests with a missing or incorrect token are
-    rejected with 403 before any hook processing.
+    webhook_token  — the per-install secret every /webhook and /do-update
+        request must supply as ?token=<value>.
+    on_do_update   — optional callback invoked by GET /do-update to trigger
+        the self-update flow in the tray process.
     """
     app = Flask(__name__, instance_relative_config=False)
     # Suppress Flask's startup banner and per-request logging in the tray app.
@@ -45,17 +50,17 @@ def create_app(config: "Config", webhook_token: str) -> Flask:
 
     @app.before_request
     def _authenticate():
-        # Only the /webhook endpoint requires the token; /health is intentionally
-        # unauthenticated so the pre-push check script can probe liveness easily.
-        if request.endpoint != "webhook":
+        # /health is intentionally unauthenticated — pre-push check scripts
+        # and basic monitoring probe it without needing the secret token.
+        if request.endpoint not in ("webhook", "do_update"):
             return
         provided = request.args.get("token", "")
         # hmac.compare_digest performs a constant-time comparison so an attacker
         # cannot infer the correct token from response-timing differences.
         if not provided or not hmac.compare_digest(provided, webhook_token):
             logger.warning(
-                "Rejected /webhook request with invalid or missing token "
-                "(remote_addr=%s)", request.remote_addr,
+                "Rejected /%s request with invalid or missing token "
+                "(remote_addr=%s)", request.endpoint, request.remote_addr,
             )
             return jsonify({"error": "unauthorized"}), 403
 
@@ -75,6 +80,20 @@ def create_app(config: "Config", webhook_token: str) -> Flask:
 
         # Return empty 200; Claude Code ignores the body for async hooks.
         return jsonify({}), 200
+
+    @app.get("/do-update")
+    def do_update():
+        """
+        Trigger the self-update flow in the running tray process.
+
+        Called by the short-lived protocol-handler process that is launched
+        when the user clicks a cc-notify:// URI on an update toast.  The
+        response is immediate; the actual download and restart happen in a
+        background thread spawned by on_do_update.
+        """
+        if on_do_update:
+            on_do_update()
+        return jsonify({"status": "ok"}), 200
 
     @app.get("/health")
     def health():
