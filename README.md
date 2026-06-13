@@ -57,7 +57,9 @@ The webhook server is now listening on `http://localhost:9876`.
 **Option A — from the tray icon (recommended):**
 
 Right-click the purple bell in the system tray and choose
-**"Setup Claude Code Hooks…"**.
+**"Setup Claude Code Hooks…"**:
+
+![cc-notify tray menu](assets/tray-menu.png)
 
 cc-notify auto-detects whether Claude Code is installed natively on Windows,
 inside WSL2, or both, and configures each environment. A toast notification
