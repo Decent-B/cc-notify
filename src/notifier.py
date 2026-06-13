@@ -9,6 +9,7 @@ take down the webhook server.
 from __future__ import annotations
 
 import logging
+import shlex
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,52 @@ _SOUNDS: dict[str, str] = {
 }
 
 
-def _send(title: str, body: str, sound_key: str, sound_enabled: bool) -> None:
+def _vscode_launcher(cwd: str):
+    """
+    Return an on_click callable that opens VS Code at cwd, or None if cwd is empty.
+
+    Clicking the toast runs `code <cwd>`.  Two path styles are handled:
+
+      Windows path (e.g. C:\\Users\\...):
+        subprocess.Popen(["code", cwd]) — VS Code CLI on the Windows PATH.
+
+      WSL2 Linux path (e.g. /home/user/project):
+        wsl.exe runs `code <cwd>` inside the distro so VS Code opens with
+        the Remote WSL extension active for that folder, preserving the
+        correct filesystem context.
+    """
+    if not cwd:
+        return None
+
+    def _launch(args=None):
+        import subprocess
+        try:
+            if cwd.startswith("/"):
+                # Linux/WSL2 path — delegate to the distro's `code` binary so
+                # VS Code opens as a Remote WSL session for this folder.
+                subprocess.Popen(
+                    ["wsl.exe", "--", "bash", "-c", f"code {shlex.quote(cwd)}"],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            else:
+                subprocess.Popen(
+                    ["code", cwd],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            logger.debug("Opened VS Code at: %s", cwd)
+        except Exception as exc:
+            logger.warning("Failed to open VS Code at %r: %s", cwd, exc)
+
+    return _launch
+
+
+def _send(
+    title: str,
+    body: str,
+    sound_key: str,
+    sound_enabled: bool,
+    on_click=None,
+) -> None:
     """Dispatch a single toast notification. Swallows all exceptions."""
     try:
         from win11toast import notify  # imported lazily — not available outside Windows
@@ -29,32 +75,43 @@ def _send(title: str, body: str, sound_key: str, sound_enabled: bool) -> None:
         kwargs: dict = {}
         if sound_enabled:
             kwargs["audio"] = {"src": _SOUNDS.get(sound_key, _SOUNDS["generic"])}
+        if on_click is not None:
+            kwargs["on_click"] = on_click
 
         notify(title, body, **kwargs)
-        logger.debug("Notification sent: %s — %s", title, body)
+        logger.debug("Notification sent: %s", title)
     except Exception as exc:
         logger.warning("Failed to send notification: %s", exc)
 
 
-def permission(message: str, sound_enabled: bool = True) -> None:
+def permission(message: str, sound_enabled: bool = True, cwd: str = "") -> None:
     """Claude Code is paused waiting for the user to approve an action."""
     body = message or "Claude Code is waiting for your approval to proceed."
-    _send("Claude Code — Permission Required", body, "permission", sound_enabled)
+    _send(
+        "Claude Code — Permission Required", body, "permission", sound_enabled,
+        on_click=_vscode_launcher(cwd),
+    )
 
 
-def idle(message: str, sound_enabled: bool = True) -> None:
+def idle(message: str, sound_enabled: bool = True, cwd: str = "") -> None:
     """Claude Code is idle and waiting for the user to respond."""
     body = message or "Claude Code is waiting for your response."
-    _send("Claude Code — Waiting for Input", body, "idle", sound_enabled)
+    _send(
+        "Claude Code — Waiting for Input", body, "idle", sound_enabled,
+        on_click=_vscode_launcher(cwd),
+    )
 
 
-def stop(sound_enabled: bool = True) -> None:
+def stop(sound_enabled: bool = True, cwd: str = "") -> None:
     """Claude Code has finished generating a response."""
-    _send("Claude Code — Task Complete", "Claude has finished responding.", "stop", sound_enabled)
+    _send(
+        "Claude Code — Task Complete", "Claude has finished responding.", "stop", sound_enabled,
+        on_click=_vscode_launcher(cwd),
+    )
 
 
 def generic(title: str, message: str, sound_enabled: bool = True) -> None:
-    """Fallback for any other Claude Code notification type."""
+    """Fallback for any other Claude Code notification type. No VS Code focus."""
     _send(title or "Claude Code", message, "generic", sound_enabled)
 
 
@@ -63,8 +120,8 @@ def update_available(current: str, latest: str, releases_url: str, sound_enabled
     Notify that a newer release is available.
 
     The toast is clickable — clicking it opens releases_url in the browser.
-    on_click is handled directly here because the shared _send helper does
-    not expose that parameter (no other notification type needs it).
+    on_click is a URL string here (not a callable) because the target is a
+    browser page, not VS Code.
     """
     try:
         from win11toast import notify
@@ -79,6 +136,6 @@ def update_available(current: str, latest: str, releases_url: str, sound_enabled
             on_click=releases_url,
             **kwargs,
         )
-        logger.debug("Update notification sent: %s → %s", current, latest)
+        logger.debug("Update notification sent: %s -> %s", current, latest)
     except Exception as exc:
         logger.warning("Failed to send update notification: %s", exc)

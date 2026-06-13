@@ -31,13 +31,16 @@ def create_app(config: "Config") -> Flask:
     @app.post("/webhook")
     def webhook():
         payload: dict = request.get_json(silent=True) or {}
-        event: str = payload.get("hook_event_name", "")
+        event: str             = payload.get("hook_event_name", "")
         notification_type: str = payload.get("notification_type", "")
-        message: str = payload.get("message", "")
-        title: str = payload.get("title", "")
+        message: str           = payload.get("message", "")
+        title: str             = payload.get("title", "")
+        # cwd is included in every Claude Code hook payload and used as the
+        # click target so toasts open VS Code in the relevant project folder.
+        cwd: str               = payload.get("cwd", "")
 
-        logger.debug("hook received: event=%s type=%s", event, notification_type)
-        _dispatch(config, event, notification_type, title, message, payload)
+        logger.debug("hook received: event=%s type=%s cwd=%s", event, notification_type, cwd)
+        _dispatch(config, event, notification_type, title, message, cwd, payload)
 
         # Return empty 200; Claude Code ignores the body for async hooks.
         return jsonify({}), 200
@@ -56,6 +59,7 @@ def _dispatch(
     notification_type: str,
     title: str,
     message: str,
+    cwd: str,
     payload: dict,
 ) -> None:
     """Route a Claude Code hook event to the correct notifier function."""
@@ -63,18 +67,19 @@ def _dispatch(
 
     if event == "Notification":
         if notification_type == "permission_prompt" and config.notify_on_permission:
-            notifier.permission(message, config.sound_enabled)
+            notifier.permission(message, config.sound_enabled, cwd=cwd)
 
         elif notification_type == "idle_prompt" and config.notify_on_idle:
-            notifier.idle(message, config.sound_enabled)
+            notifier.idle(message, config.sound_enabled, cwd=cwd)
 
         elif notification_type in ("auth_success", "elicitation_dialog", "elicitation_complete"):
             # Low-priority status updates — only send if a message is provided.
+            # No VS Code focus for these; they don't require user interaction.
             if message:
                 notifier.generic(title or "Claude Code", message, config.sound_enabled)
 
     elif event == "Stop" and config.notify_on_stop:
-        notifier.stop(config.sound_enabled)
+        notifier.stop(config.sound_enabled, cwd=cwd)
 
     elif event == "PermissionRequest" and config.notify_on_permission:
         # PermissionRequest carries the tool name and input, giving more detail
@@ -83,4 +88,5 @@ def _dispatch(
         notifier.permission(
             f"{tool} is requesting permission. Switch to Claude Code to approve or deny.",
             config.sound_enabled,
+            cwd=cwd,
         )
