@@ -41,7 +41,7 @@ done
 
 # ── Resolve paths ─────────────────────────────────────────────────────────────
 
-# Must be called from the repo root.
+# Must be called from anywhere inside the repo; resolves to the repo root.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WIN_PATH=$(wslpath -w "$REPO_ROOT")
 
@@ -52,10 +52,19 @@ echo ""
 
 # ── Delegate to Windows PowerShell ───────────────────────────────────────────
 
-# Single-quoted strings inside the PowerShell -Command value are safe here:
-# bash expands only WIN_PATH; PowerShell receives a literal script string.
+# NOTE on PATH: powershell.exe started from WSL2 with -NoProfile does not
+# inherit the Windows user PATH set by installer scripts (uv, etc.).
+# We re-read both Machine and User scopes from the registry explicitly so
+# any tool installed on Windows is visible to this session.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
   \$ErrorActionPreference = 'Stop'
+
+  \$env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
+
+  if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw 'uv not found on the Windows PATH. Install it from a Windows PowerShell: irm https://astral.sh/uv/install.ps1 | iex'
+  }
+
   Set-Location '${WIN_PATH}'
 
   Write-Host '>>> Installing dependencies'
