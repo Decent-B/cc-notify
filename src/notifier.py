@@ -5,12 +5,31 @@ Abstracts win11toast so the rest of the app deals only with high-level
 event types (permission, idle, stop, generic). All calls are fire-and-forget;
 errors are logged but never propagated — a broken notification must not
 take down the webhook server.
+
+VS Code focus on click
+  Toast notifications that carry a cwd field use a vscode:// URI as the
+  on_click value (not a Python callable). When on_click is a string, win11toast
+  writes it as the toast XML <toast launch="..."> attribute, so Windows
+  delivers the URI directly to VS Code's registered protocol handler on click —
+  including when the toast is clicked from Action Center after it has timed out.
+
+  A Python callable on_click is unreliable in this scenario: win11toast
+  dispatches it via asyncio call_soon_threadsafe(), but by the time a
+  timed-out toast is clicked from Action Center the asyncio future is already
+  resolved and the activation event is silently discarded.
+
+  Using a URI also avoids the foreground-focus chain problem:
+    wsl.exe → bash → code → SetForegroundWindow
+  Windows foreground rights expire (~200 ms) long before VS Code receives the
+  IPC message through that chain. A URI activation via the Windows shell lets
+  the shell grant foreground rights to VS Code directly.
 """
 from __future__ import annotations
 
 import logging
 import os.path
-import shlex
+import urllib.parse
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -22,55 +41,94 @@ _SOUNDS: dict[str, str] = {
     "generic":    "ms-winsoundevent:Notification.Default",
 }
 
+# Cached after first detection — wsl.exe is called at most once per session.
+_wsl2_default_distro: Optional[str] = None
 
-def _vscode_launcher(cwd: str):
+
+def _get_default_wsl2_distro() -> Optional[str]:
     """
-    Return an on_click callable that opens VS Code at cwd, or None if cwd is
-    empty or does not look like an absolute filesystem path.
+    Return the name of the default WSL2 distro (e.g. "Ubuntu-24.04").
 
-    Clicking the toast runs `code <cwd>`.  Two path styles are handled:
-
-      Windows path (e.g. C:\\Users\\...):
-        subprocess.Popen(["code", "--", cwd]) — the "--" sentinel tells the
-        VS Code CLI that the following argument is a path, not a flag.  This
-        prevents a crafted cwd value like "--inspect" from being interpreted
-        as a CLI option.
-
-      WSL2 Linux path (e.g. /home/user/project):
-        wsl.exe runs `code <cwd>` inside the distro so VS Code opens with
-        the Remote WSL extension active for that folder.  shlex.quote handles
-        shell-safe quoting so path characters cannot escape the argument.
-
-    Only absolute paths pass the os.path.isabs() guard, so values that begin
-    with "--" or are otherwise not filesystem paths are silently ignored.
+    The result is cached after the first successful call so subsequent
+    notifications pay no subprocess overhead.  Returns None if WSL2 is
+    unavailable or detection fails — callers should handle this gracefully.
     """
-    # Reject empty or non-absolute values — legitimate Claude Code cwd fields
-    # are always absolute paths (e.g. "C:\projects\foo" or "/home/user/foo").
+    global _wsl2_default_distro
+    if _wsl2_default_distro is not None:
+        return _wsl2_default_distro
+
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "--list", "--quiet"],
+            capture_output=True,
+            timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            return None
+
+        # WSL2 outputs UTF-16 LE on most Windows versions; fall back to UTF-8.
+        try:
+            text = result.stdout.decode("utf-16-le")
+        except UnicodeDecodeError:
+            text = result.stdout.decode("utf-8", errors="ignore")
+
+        for line in text.splitlines():
+            name = line.strip().replace("\x00", "")
+            if name:
+                _wsl2_default_distro = name
+                logger.debug("Detected default WSL2 distro: %s", name)
+                return name
+    except Exception as exc:
+        logger.debug("Could not detect WSL2 distro: %s", exc)
+    return None
+
+
+def _vscode_uri(cwd: str) -> Optional[str]:
+    """
+    Build a vscode:// URI for opening VS Code at cwd, or return None.
+
+    URI formats:
+      WSL2 path  (starts with /):  vscode://vscode-remote/wsl+<distro><path>
+      Windows path (drive letter): vscode://file/<forward-slash path>
+
+    The URI is percent-encoded so that spaces and special characters in the
+    path are transmitted correctly to VS Code's URI handler.
+
+    Only absolute paths pass the os.path.isabs() guard.  Values that start
+    with "--" or are not filesystem paths are rejected, preventing a crafted
+    cwd payload from reaching VS Code as a CLI flag.
+
+    Returns None when the URI cannot be constructed (empty cwd, non-absolute
+    path, or WSL2 not available for a Linux path).
+    """
     if not cwd or not os.path.isabs(cwd):
         return None
 
-    def _launch(args=None):
-        import subprocess
-        try:
-            if cwd.startswith("/"):
-                # Linux/WSL2 path — delegate to the distro's `code` binary so
-                # VS Code opens as a Remote WSL session for this folder.
-                subprocess.Popen(
-                    ["wsl.exe", "--", "bash", "-c", f"code {shlex.quote(cwd)}"],
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            else:
-                # "--" separates options from positional arguments, ensuring cwd
-                # is treated as a path even if it begins with a hyphen.
-                subprocess.Popen(
-                    ["code", "--", cwd],
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            logger.debug("Opened VS Code at: %s", cwd)
-        except Exception as exc:
-            logger.warning("Failed to open VS Code at %r: %s", cwd, exc)
-
-    return _launch
+    if cwd.startswith("/"):
+        # WSL2/Linux path — use the vscode-remote URI scheme so VS Code opens
+        # the folder as a proper Remote-WSL session.  The distro name forms part
+        # of the authority component, e.g. wsl+Ubuntu-24.04.
+        distro = _get_default_wsl2_distro()
+        if not distro:
+            logger.warning(
+                "Cannot build VS Code URI for WSL2 path: distro not detected. "
+                "Ensure WSL2 is installed and at least one distro is running."
+            )
+            return None
+        # Encode the path component (spaces → %20 etc.) but keep slashes as-is.
+        encoded_path = urllib.parse.quote(cwd, safe="/")
+        # Encode the distro name in case it contains unusual characters.
+        encoded_distro = urllib.parse.quote(distro, safe="")
+        return f"vscode://vscode-remote/wsl+{encoded_distro}{encoded_path}"
+    else:
+        # Windows absolute path — use the vscode://file/ scheme.
+        # Convert backslashes to forward slashes; keep the colon after the
+        # drive letter (e.g. C:/Users/...).
+        forward = cwd.replace("\\", "/")
+        encoded = urllib.parse.quote(forward, safe=":/")
+        return f"vscode://file/{encoded}"
 
 
 def _send(
@@ -101,7 +159,7 @@ def permission(message: str, sound_enabled: bool = True, cwd: str = "") -> None:
     body = message or "Claude Code is waiting for your approval to proceed."
     _send(
         "Claude Code — Permission Required", body, "permission", sound_enabled,
-        on_click=_vscode_launcher(cwd),
+        on_click=_vscode_uri(cwd),
     )
 
 
@@ -110,7 +168,7 @@ def idle(message: str, sound_enabled: bool = True, cwd: str = "") -> None:
     body = message or "Claude Code is waiting for your response."
     _send(
         "Claude Code — Waiting for Input", body, "idle", sound_enabled,
-        on_click=_vscode_launcher(cwd),
+        on_click=_vscode_uri(cwd),
     )
 
 
@@ -118,7 +176,7 @@ def stop(sound_enabled: bool = True, cwd: str = "") -> None:
     """Claude Code has finished generating a response."""
     _send(
         "Claude Code — Task Complete", "Claude has finished responding.", "stop", sound_enabled,
-        on_click=_vscode_launcher(cwd),
+        on_click=_vscode_uri(cwd),
     )
 
 
