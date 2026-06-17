@@ -28,6 +28,7 @@ class Config:
 
     # Which Claude Code events trigger a notification.
     notify_on_stop: bool = True
+    notify_on_stop_failure: bool = True
     notify_on_permission: bool = True
     notify_on_idle: bool = True
 

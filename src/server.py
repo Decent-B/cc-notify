@@ -131,6 +131,12 @@ def _dispatch(
     elif event == "Stop" and config.notify_on_stop:
         notifier.stop(config.sound_enabled, cwd=cwd)
 
+    elif event == "StopFailure" and config.notify_on_stop_failure:
+        # stop_reason carries the error category (rate_limit, server_error, etc.)
+        # and is used to choose a descriptive title for the toast.
+        stop_reason: str = payload.get("stop_reason", "")
+        notifier.stop_failure(stop_reason, config.sound_enabled, cwd=cwd)
+
     elif event == "PermissionRequest" and config.notify_on_permission:
         # PermissionRequest carries the tool name and input, giving more detail
         # than the generic Notification[permission_prompt] message.
