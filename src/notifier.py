@@ -59,7 +59,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
-from messages import IDLE_MESSAGES, PERMISSION_MESSAGES, STOP_MESSAGES
+from messages import IDLE_MESSAGES, PERMISSION_MESSAGES, STOP_FAILURE_MESSAGES, STOP_MESSAGES
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +70,11 @@ _DISPLAY_NAME = "Claude Code Agent"
 
 # WinRT system sound events used per notification type.
 _SOUNDS: dict[str, str] = {
-    "permission": "ms-winsoundevent:Notification.Looping.Alarm2",
-    "idle":       "ms-winsoundevent:Notification.Default",
-    "stop":       "ms-winsoundevent:Notification.Default",
-    "generic":    "ms-winsoundevent:Notification.Default",
+    "permission":   "ms-winsoundevent:Notification.Looping.Alarm2",
+    "stop_failure": "ms-winsoundevent:Notification.Looping.Alarm",
+    "idle":         "ms-winsoundevent:Notification.Default",
+    "stop":         "ms-winsoundevent:Notification.Default",
+    "generic":      "ms-winsoundevent:Notification.Default",
 }
 
 # Cached after first detection — wsl.exe is called at most once per session.
@@ -313,6 +314,29 @@ def stop(sound_enabled: bool = True, cwd: str = "") -> None:
     _send(
         "Claude Code — Task Complete", _pick(STOP_MESSAGES),
         "stop", sound_enabled,
+        on_click=_vscode_uri(cwd),
+    )
+
+
+# Maps the stop_reason values Claude Code sends with a StopFailure event to
+# a descriptive toast title so the user can see the error type at a glance.
+_STOP_FAILURE_TITLES: dict[str, str] = {
+    "rate_limit":            "Claude Code — Rate Limited",
+    "authentication_failed": "Claude Code — Auth Failed",
+    "billing_error":         "Claude Code — Billing Error",
+    "invalid_request":       "Claude Code — Request Error",
+    "server_error":          "Claude Code — Server Error",
+    "max_output_tokens":     "Claude Code — Token Limit Reached",
+}
+_STOP_FAILURE_TITLE_DEFAULT = "Claude Code — Something Went Wrong"
+
+
+def stop_failure(stop_reason: str = "", sound_enabled: bool = True, cwd: str = "") -> None:
+    """Claude Code's turn ended due to an API or server error."""
+    title = _STOP_FAILURE_TITLES.get(stop_reason, _STOP_FAILURE_TITLE_DEFAULT)
+    _send(
+        title, _pick(STOP_FAILURE_MESSAGES),
+        "stop_failure", sound_enabled,
         on_click=_vscode_uri(cwd),
     )
 
