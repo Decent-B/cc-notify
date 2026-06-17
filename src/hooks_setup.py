@@ -76,6 +76,7 @@ def _build_hooks_block(webhook_url: str) -> dict:
     return {
         "Notification":      [hook_group],
         "Stop":              [hook_group],
+        "StopFailure":       [hook_group],
         "PermissionRequest": [hook_group],
     }
 
@@ -141,7 +142,7 @@ def setup_windows(port: int, token: str) -> tuple[bool, Optional[str]]:
 
         # Log which events will be overwritten vs added fresh
         existing_hooks: set[str] = set(existing.get("hooks", {}).keys())
-        target_events = ["Notification", "Stop", "PermissionRequest"]
+        target_events = ["Notification", "Stop", "StopFailure", "PermissionRequest"]
         for event in target_events:
             if event in existing_hooks:
                 logger.info("[Windows] Overwriting existing '%s' hook", event)
@@ -265,7 +266,7 @@ block = {"hooks": [{"type": "http", "url": webhook_url, "async": True}]}
 if "hooks" not in settings:
     settings["hooks"] = {}
 
-target_events = ["Notification", "Stop", "PermissionRequest"]
+target_events = ["Notification", "Stop", "StopFailure", "PermissionRequest"]
 for event in target_events:
     action = "overwriting" if event in settings["hooks"] else "adding"
     print(f"{action:9} : '{event}' hook", flush=True)
