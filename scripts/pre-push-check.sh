@@ -9,8 +9,9 @@
 #   5. Confirm the working tree is clean
 #
 # Visual: watch the Windows Notification Center during step 4 —
-# three distinct toasts should appear (Task Complete, Permission
-# Required with alarm sound, and Waiting for Input).
+# four distinct toasts should appear (Task Complete, Something Went
+# Wrong with alarm sound, Permission Required with alarm sound, and
+# Waiting for Input).
 #
 # Usage:
 #   bash scripts/pre-push-check.sh                  # run all steps
@@ -36,9 +37,9 @@ Steps
                server is ready (15-second timeout)
   4  Webhooks  POST a test payload for every notification type and
                verify each returns HTTP 200
-               (watch Windows Notification Center — three toasts
-               should appear: Task Complete, Permission Required,
-               Waiting for Input)
+               (watch Windows Notification Center — four toasts
+               should appear: Task Complete, Something Went Wrong,
+               Permission Required, Waiting for Input)
   5  Git       Confirm the working tree is clean before pushing
 
 Options
@@ -269,6 +270,9 @@ if [[ $FROM_STEP -le 4 ]]; then
 
     webhook_test "Stop          → Task Complete toast" \
       '{"hook_event_name":"Stop","session_id":"test","cwd":"/home"}'
+
+    webhook_test "StopFailure/server_error → Something Went Wrong toast (alarm)" \
+      '{"hook_event_name":"StopFailure","stop_reason":"server_error","session_id":"test","cwd":"/home"}'
 
     webhook_test "PermissionRequest → Permission Required toast (alarm)" \
       '{"hook_event_name":"PermissionRequest","tool_name":"Bash","session_id":"test","cwd":"/home"}'
