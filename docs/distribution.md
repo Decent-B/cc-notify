@@ -1,70 +1,41 @@
 # Distribution Guide
 
-How cc-notify is packaged, released, and delivered to end users via GitHub.
-
----
-
-## Build Pipeline Overview
+## Build pipeline
 
 ```
-git tag v1.0.0
-  └── GitHub Actions (windows-latest)
-        ├── pip install -r requirements.txt
-        ├── pip install pyinstaller
-        ├── python scripts/create_icon.py          # generates assets/icon.ico
-        ├── pyinstaller build.spec                  # → dist/cc-notify.exe
-        ├── rename  cc-notify-1.0.0-windows-x64.exe
-        ├── SHA256 checksum  → SHA256SUMS.txt
-        └── softprops/action-gh-release → GitHub Release
+git tag v0.2.0 && git push origin v0.2.0
+        │
+        ▼
+GitHub Actions (.github/workflows/release.yml, windows-latest)
+        ├── dotnet test tests/CcNotify.Core.Tests
+        ├── dotnet publish src/CcNotify.App -c Release -p:Platform=x64 -p:Version=<tag> -o dist
+        ├── rename → cc-notify-<version>-windows-x64.exe, SHA-256 checksum
+        └── create GitHub Release with the EXE + SHA256SUMS.txt
 ```
 
----
+## Single-file, self-contained EXE
 
-## PyInstaller — Single-File EXE
+The app is an **unpackaged, self-contained WinUI 3** program published with
+`PublishSingleFile` + compression (see the properties in
+`src/CcNotify.App/CcNotify.App.csproj`, per the
+[Windows App SDK docs](https://learn.microsoft.com/windows/apps/package-and-deploy/unpackage-winui-app)).
 
-cc-notify is distributed as a single `cc-notify-<version>-windows-x64.exe`
-produced by **PyInstaller** with `--onefile` mode (configured in `build.spec`).
+- Nothing to install: the .NET runtime and the Windows App SDK runtime are inside the EXE
+  (about 90 MB, compressed).
+- On first launch the bundle extracts to a temp folder, so the very first start is slower.
+- No MSIX / package identity, so no Store updates — cc-notify updates itself from GitHub Releases.
 
-| Property | Value |
-|---|---|
-| Python bundled | 3.11 (set in release.yml) |
-| Console window | No (`console=False` in spec) |
-| Typical size | 25–50 MB |
-| Python required on target | No |
+## Auto-update
 
-### Why single-file EXE?
+*Tray → Check for updates* (or Settings) calls the GitHub API for the latest release, picks the
+`cc-notify*.exe` asset, downloads it to `%TEMP%`, and starts a detached PowerShell helper that
+waits for the app to exit, swaps the EXE in place and starts the new one. HTTPS uses the
+Windows certificate store through .NET; no extra CA bundle is needed.
 
-- Zero-friction: download and double-click.
-- No installer required for a single tray app.
-- Fits under GitHub's 100 MB artifact limit.
-
-### Why not an installer?
-
-An Inno Setup / NSIS installer adds value when the app needs to register as a
-Windows Service or add startup entries automatically. cc-notify keeps startup
-optional (via `-AddToStartup` in `setup-hooks.ps1`) and runs as a regular user
-process, so the extra complexity is not warranted yet.
-
----
-
-## GitHub Releases Structure
-
-```
-Release: v1.0.0
-├── cc-notify-1.0.0-windows-x64.exe   # Primary download
-└── SHA256SUMS.txt                     # Integrity check
-```
-
-### Triggering a release
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-GitHub Actions builds the EXE and publishes the release automatically.
-
----
+> Releases up to 0.1.7 only self-update from an asset named exactly `cc-notify.exe`, but CI used to
+> publish only `cc-notify-<version>-windows-x64.exe`, so their updater never found anything. From
+> 0.2 the release also carries a copy named `cc-notify.exe`, so 0.1.x users can run *Check for
+> updates* and get the new build in place (not yet tested end-to-end against a real 0.1.x install).
 
 ## Code Signing
 
@@ -98,99 +69,11 @@ For an open-source side project:
 - **Recommendation:** Skip signing initially; add Sectigo EV (~$300/year) once
   the project has a registered entity behind it.
 
-### Antivirus false positives
 
-PyInstaller-bundled executables are sometimes flagged by antivirus scanners
-because the same packing technique is used by some malware. This is a known
-issue with PyInstaller and does not indicate the app is harmful. Submitting
-the EXE to VirusTotal and referencing the clean scan result in the README
-builds user confidence.
-
----
-
-## Alternative Installation Methods
-
-### Scoop (community bucket)
-
-Scoop is a command-line installer for Windows, popular with developers:
+## Building locally
 
 ```powershell
-scoop bucket add cc-notify https://github.com/Decent-B/scoop-cc-notify
-scoop install cc-notify
+dotnet publish src/CcNotify.App -c Release -p:Platform=x64 -o dist   # → dist/cc-notify.exe
 ```
 
-A Scoop bucket is a separate GitHub repository (`scoop-cc-notify`) containing
-a JSON manifest (`bucket/cc-notify.json`) that points to the release EXE.
-The `checkver` + `autoupdate` manifest fields let Scoop auto-update the
-manifest when a new GitHub release appears.
-
-**To create the bucket repo:** See the
-[Scoop App Manifests Wiki](https://github.com/ScoopInstaller/Scoop/wiki/App-Manifests).
-
-### winget
-
-Submit a manifest to
-[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) so users can
-install with:
-
-```powershell
-winget install Decent-B.cc-notify
-```
-
-Use `winget-create new <release-url>` to generate the manifest YAML, then open
-a PR to the winget-pkgs repo. Automated review usually completes in 1–3 days.
-
-**Note:** winget validation runs VirusTotal on the EXE. PyInstaller false
-positives can cause rejection. Use an Inno Setup wrapper or sign the EXE to
-reduce the false positive rate before submitting.
-
----
-
-## Auto-Update
-
-cc-notify includes a lightweight in-app update checker. When the user selects
-**"Check for Updates"** from the system tray menu, the app queries:
-
-```
-https://api.github.com/repos/Decent-B/cc-notify/releases/latest
-```
-
-If a newer version is available it shows a clickable toast notification —
-clicking the toast opens the releases page in the browser. The user downloads
-and runs the new EXE manually; no silent background updates occur.
-
-The implementation lives in `src/updater.py` and uses only the Python standard
-library (`urllib`, `json`, `ssl`) plus `certifi` for reliable TLS certificate
-verification inside the PyInstaller bundle.
-
----
-
-## Running from Source (Developers)
-
-```powershell
-# Windows PowerShell
-cd cc-notify
-pip install -r requirements.txt
-python src/main.py
-```
-
-```bash
-# WSL2 — only for development; notifications require Windows-side execution.
-pip install flask waitress pillow pystray
-# win11toast will install but WinRT calls will fail in WSL2 Linux.
-```
-
-The icon is generated at runtime from Pillow code in `tray.py`, so no build
-step is needed for development runs.
-
----
-
-## Building Locally
-
-```powershell
-# Requires Windows (PyInstaller can only build for the host OS)
-pip install -r requirements.txt
-pip install pyinstaller
-python scripts/create_icon.py       # generates assets/icon.ico
-pyinstaller build.spec              # produces dist/cc-notify.exe
-```
+From WSL2: `bash scripts/build-windows.sh`.

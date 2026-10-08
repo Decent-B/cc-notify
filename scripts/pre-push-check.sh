@@ -9,7 +9,7 @@
 #   5. Confirm the working tree is clean
 #
 # Visual: watch the Windows Notification Center during step 4 —
-# four distinct toasts should appear (Task Complete, Something Went
+# four distinct popups should appear (Task Complete, Something Went
 # Wrong with alarm sound, Permission Required with alarm sound, and
 # Waiting for Input).
 #
@@ -37,7 +37,7 @@ Steps
                server is ready (15-second timeout)
   4  Webhooks  POST a test payload for every notification type and
                verify each returns HTTP 200
-               (watch Windows Notification Center — four toasts
+               (watch the bottom-right of your screen — four popups
                should appear: Task Complete, Something Went Wrong,
                Permission Required, Waiting for Input)
   5  Git       Confirm the working tree is clean before pushing
@@ -256,7 +256,7 @@ fi
 # ── Step 4: Webhook tests ─────────────────────────────────────────────────────
 
 if [[ $FROM_STEP -le 4 ]]; then
-  section "4/5  Webhooks  (watch for toasts on screen)"
+  section "4/5  Webhooks  (watch for popups on screen)"
 
   # Token must exist by this point.  If it's still empty it means cc-notify
   # was never launched (e.g. --from-step 4 on a machine with no state.json).
@@ -268,16 +268,16 @@ if [[ $FROM_STEP -le 4 ]]; then
     echo "  2–3 launch the EXE and populate state.json."
   else
 
-    webhook_test "Stop          → Task Complete toast" \
+    webhook_test "Stop          → Task Complete popup" \
       '{"hook_event_name":"Stop","session_id":"test","cwd":"/home"}'
 
-    webhook_test "StopFailure/server_error → Something Went Wrong toast (alarm)" \
+    webhook_test "StopFailure/server_error → Something Went Wrong popup (alarm)" \
       '{"hook_event_name":"StopFailure","stop_reason":"server_error","session_id":"test","cwd":"/home"}'
 
-    webhook_test "PermissionRequest → Permission Required toast (alarm)" \
-      '{"hook_event_name":"PermissionRequest","tool_name":"Bash","session_id":"test","cwd":"/home"}'
+    webhook_test "Notification/permission_prompt → Permission Required popup (alarm)" \
+      '{"hook_event_name":"Notification","notification_type":"permission_prompt","session_id":"test","cwd":"/home"}'
 
-    webhook_test "Notification/idle_prompt → Waiting for Input toast" \
+    webhook_test "Notification/idle_prompt → Waiting for Input popup" \
       '{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Waiting for your reply.","session_id":"test","cwd":"/home"}'
   fi
 fi

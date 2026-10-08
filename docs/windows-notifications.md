@@ -1,5 +1,7 @@
 # Windows Toast Notifications — Reference
 
+> **Note (v0.2):** the app was rewritten in C# / WinUI 3 and now draws its own popups instead of Windows toasts (so it can choose the monitor). This document describes the Windows toast platform for background; see [architecture.md](architecture.md) for what cc-notify does today.
+
 Research notes on Windows native toast notification capabilities and limits,
 compiled for the cc-notify project.
 

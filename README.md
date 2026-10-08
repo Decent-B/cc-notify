@@ -1,10 +1,11 @@
 # cc-notify
 
-A lightweight Windows tray application that sends **native Windows toast
-notifications** whenever Claude Code needs your attention — permission requests,
-idle prompts, and task completion signals.
+A lightweight Windows tray app (WinUI 3 / .NET 8) that pops up a notification
+whenever Claude Code needs your attention — permission requests, idle prompts,
+task completion and errors.
 
-Works whether Claude Code runs natively on Windows or inside **WSL2**.
+Works whether Claude Code runs natively on Windows or inside **WSL2**, and on
+**multi-monitor** setups: popups appear on the display you are working on.
 
 ---
 
@@ -15,89 +16,69 @@ Claude Code (WSL2 or Windows)
     │
     │  HTTP POST /webhook  (async, fire-and-forget)
     ▼
-cc-notify.exe  (Windows tray app, port 9876)
+cc-notify.exe  (tray app, 127.0.0.1:9876)
     │
-    │  WinRT toast API
+    │  router → sound → display selector
     ▼
-Windows Notification Center
+Popup in the bottom-right of the chosen monitor
+(click it to jump to the matching VS Code window)
 ```
 
-Claude Code fires HTTP webhook hooks at key lifecycle events. cc-notify
-receives them and shows a native toast that appears in the bottom-right corner
-of your screen and persists in Notification Center.
+Windows' own toasts always appear on the primary display and cannot be
+redirected, so cc-notify draws its own popups. That is what lets it choose the
+monitor.
 
 ### Notification triggers
 
 | Event | What it means | Notification |
 |---|---|---|
-| `PermissionRequest` | Claude wants to run a tool and needs your OK | "Permission Required" — includes the tool name |
-| `Notification[permission_prompt]` | Same, from the UI-layer signal | "Permission Required" |
+| `Notification[permission_prompt]` | Claude is showing you a permission prompt | "Permission Required" |
 | `Notification[idle_prompt]` | Claude is waiting for your next message | "Waiting for Input" |
 | `Stop` | Claude finished generating a response | "Task Complete" |
+| `StopFailure` | The turn ended on an API error (rate limit, auth, server…) | e.g. "Rate Limited" |
+
+`PermissionRequest` is not used: Claude Code fires it *together with*
+`Notification[permission_prompt]` (two popups for one prompt) and also when auto
+mode decides by itself without asking you.
 
 ---
 
 ## Installation
 
-### Step 1 — Download cc-notify
+Download the latest `cc-notify-<version>-windows-x64.exe` from
+[**Releases**](https://github.com/Decent-B/cc-notify/releases) and double-click
+it (SmartScreen: **More info → Run anyway**; the app is not code-signed).
+A purple bell appears in the tray. Nothing else to install — the .NET and
+Windows App SDK runtimes are bundled.
 
-Go to the [**Releases**](https://github.com/Decent-B/cc-notify/releases)
-page and download the latest `cc-notify-<version>-windows-x64.exe`.
+On first launch cc-notify:
 
-> **SmartScreen warning?**
-> Click **"More info"** → **"Run anyway"**.
-> This is expected for open-source apps without an expensive EV code-signing
-> certificate. The source is fully auditable here on GitHub.
+- **starts with Windows** — turned on once by default; switch it off in
+  *Settings* (tray icon → *Settings…*) or in Windows Settings › Apps › Startup.
+  If you switch it off in Windows, cc-notify never turns it back on;
+- **configures Claude Code hooks** automatically for Windows and the default
+  WSL2 distro (redo it any time from the tray menu). Restart Claude Code once.
 
-Double-click the EXE — a purple bell icon appears in your system tray.
-The webhook server is now listening on `http://localhost:9876`.
+For manual setup see [Manual Hook Configuration](#manual-hook-configuration).
 
-### Step 2 — Configure Claude Code hooks
+### Choosing the monitor
 
-**Option A — from the tray icon (recommended):**
+*Settings → Notification display*:
 
-Right-click the purple bell in the system tray and choose
-**"Setup Claude Code Hooks…"**:
+| Mode | Popup appears on |
+|---|---|
+| Follow VS Code (default) | the display holding the VS Code window of that project; falls back to the cursor's display |
+| Follow the mouse cursor | the display the cursor is on |
+| Always the primary display | the primary display |
+| *Display N …* | one fixed display (falls back if it is unplugged) |
 
-![cc-notify tray menu](assets/tray-menu.png)
-
-cc-notify auto-detects whether Claude Code is installed natively on Windows,
-inside WSL2, or both, and configures each environment. A toast notification
-reports the result when finished. Restart Claude Code to apply.
-
-**Option B — command line:**
-
-If you prefer to run the scripts manually:
-
-*Windows (Claude Code native):*
-```powershell
-.\scripts\setup-hooks.ps1
-```
-
-*WSL2 (Claude Code running inside WSL2) — run from inside the distro:*
-```bash
-bash scripts/setup-hooks.sh
-```
-
-**Restart Claude Code** for the hook changes to take effect.
-
-### Step 3 — (Optional) Start with Windows
-
-To have cc-notify launch automatically at login:
-
-```powershell
-# Pass -ExePath with the full path where you saved cc-notify.exe
-.\scripts\setup-hooks.ps1 -AddToStartup -ExePath "C:\Tools\cc-notify.exe"
-```
-
-Or manually: press `Win+R`, type `shell:startup`, and place a shortcut to
-`cc-notify.exe` in the folder that opens.
+Use **Send test notification** to see where it lands.
 
 ---
 
 ## Manual Hook Configuration
 
-If you prefer to configure the hooks yourself, add the following to
+If you prefer to configure the hooks yourself (`<TOKEN>` is `webhook_token` in `%APPDATA%\cc-notify\state.json`), add the following to
 `~/.claude/settings.json`:
 
 ```jsonc
@@ -105,24 +86,25 @@ If you prefer to configure the hooks yourself, add the following to
   "hooks": {
     "Notification": [
       {
-        "hooks": [{ "type": "http", "url": "http://localhost:9876/webhook", "async": true }]
+        "hooks": [{ "type": "http", "url": "http://localhost:9876/webhook?token=<TOKEN>", "async": true }]
       }
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "http", "url": "http://localhost:9876/webhook", "async": true }]
+        "hooks": [{ "type": "http", "url": "http://localhost:9876/webhook?token=<TOKEN>", "async": true }]
       }
     ],
-    "PermissionRequest": [
+    "StopFailure": [
       {
-        "hooks": [{ "type": "http", "url": "http://localhost:9876/webhook", "async": true }]
+        "hooks": [{ "type": "http", "url": "http://localhost:9876/webhook?token=<TOKEN>", "async": true }]
       }
     ]
   }
 }
 ```
 
-**WSL2 users:** Replace `localhost` with your Windows host IP:
+**WSL2 users:** `localhost` works with WSL's default localhost forwarding. If you
+turned that off, use your Windows host IP:
 ```bash
 awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf
 ```
@@ -133,149 +115,73 @@ A full example file is in [examples/settings-snippet.json](examples/settings-sni
 
 ## Configuration
 
-cc-notify reads `%APPDATA%\cc-notify\config.json` on startup (defaults are
-used if the file does not exist):
+Everything is in the Settings window (tray icon → *Settings…*). It is stored in
+`%APPDATA%\cc-notify\config.json`:
 
 ```jsonc
 {
-  "port": 9876,               // webhook server port
-  "sound_enabled": true,      // play a sound with each toast
-  "notify_on_stop": true,     // "Task Complete" when Claude finishes
-  "notify_on_permission": true, // "Permission Required" notifications
-  "notify_on_idle": true      // "Waiting for Input" notifications
+  "port": 9876,                    // webhook port (edit by hand, then restart)
+  "sound_enabled": true,
+  "notify_on_stop": true,
+  "notify_on_stop_failure": true,
+  "notify_on_permission": true,
+  "notify_on_idle": true,
+  "monitor": "follow_vs_code",     // follow_vs_code | follow_cursor | primary | specific
+  "monitor_device_name": null,     // e.g. "\\\\.\\DISPLAY2" when monitor is "specific"
+  "autostart_initialized": true    // managed by the app
 }
 ```
 
-See [examples/config-example.json](examples/config-example.json) for a
-commented template. Edit the file, then **restart cc-notify** for changes to
-apply.
+Logs: `%APPDATA%\cc-notify\cc-notify.log`.
 
 ---
 
 ## Verify it Works
 
-With cc-notify running, open a terminal and send a test webhook:
+Use *Settings → Send test notification*, or post a webhook yourself (the token
+is `webhook_token` in `%APPDATA%\cc-notify\state.json`):
 
 ```powershell
-# PowerShell
-Invoke-RestMethod -Uri "http://localhost:9876/webhook" -Method Post `
+Invoke-RestMethod -Method Post "http://localhost:9876/webhook?token=<TOKEN>" `
   -ContentType "application/json" `
-  -Body '{"hook_event_name":"Stop","session_id":"test","cwd":"C:\\"}'
+  -Body '{"hook_event_name":"Stop","cwd":"C:\\"}'
 ```
-
-```bash
-# Bash (Windows or WSL2)
-curl -s -X POST http://localhost:9876/webhook \
-  -H "Content-Type: application/json" \
-  -d '{"hook_event_name":"Stop","session_id":"test","cwd":"/tmp"}'
-```
-
-You should see a "Task Complete" toast in the bottom-right corner.
 
 ---
 
 ## Building from Source
 
-The app targets Windows exclusively (WinRT toast, Win32 tray). All build
-steps must run on the Windows side, regardless of where you edit the code.
-Two development setups are supported.
+Requires the Windows [.NET 8 SDK](https://dotnet.microsoft.com/download)
+(`winget install Microsoft.DotNet.SDK.8`).
 
----
-
-### Option A — Native Windows
-
-**One-time setup:**
+**Native Windows**
 
 ```powershell
-# Install uv
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-git clone https://github.com/Decent-B/cc-notify.git
-cd cc-notify
-
-# Install runtime dependencies (does not install cc-notify as a package)
-uv sync --no-install-project
+dotnet test tests/CcNotify.Core.Tests
+dotnet run --project src/CcNotify.App -p:Platform=x64
+dotnet publish src/CcNotify.App -c Release -p:Platform=x64 -o dist   # single-file dist/cc-notify.exe
 ```
 
-**Run during development:**
-
-```powershell
-uv run python src/main.py
-```
-
-**Build the EXE:**
-
-```powershell
-uv sync --group dev --no-install-project  # also installs PyInstaller
-uv run python scripts/create_icon.py      # generates assets/icon.ico
-uv run pyinstaller build.spec             # output: dist/cc-notify.exe
-```
-
----
-
-### Option B — WSL2 (editing code inside WSL2)
-
-Because `win11toast` and `pystray` are Windows-only packages, `uv sync`
-cannot run inside the WSL2 Linux environment. A helper script handles
-this by delegating the build to Windows PowerShell via WSL2 interop,
-so you never need to leave your WSL2 terminal.
-
-**One-time setup — install uv on the Windows side:**
+**From WSL2** (MSBuild dislikes `\\wsl$` paths, so the script mirrors the repo to the Windows drive):
 
 ```bash
-# Run from your WSL2 terminal
-powershell.exe -ExecutionPolicy ByPass \
-  -c "irm https://astral.sh/uv/install.ps1 | iex"
+bash scripts/build-windows.sh            # test + publish → dist/cc-notify.exe
+bash scripts/build-windows.sh --launch   # ...and start it
+bash scripts/pre-push-check.sh           # build, launch, fire a webhook per event type
 ```
 
-**Clone and develop normally in WSL2:**
-
-```bash
-git clone https://github.com/Decent-B/cc-notify.git
-cd cc-notify
-
-# Edit code with your WSL2 editor (VS Code, Neovim, etc.)
-# All git operations work as normal from WSL2.
-```
-
-**Build the EXE from WSL2 (run from the repo root):**
-
-```bash
-bash scripts/build-windows.sh
-```
-
-This script resolves the current directory to a Windows UNC path
-(`\\wsl$\<distro>\...`) and runs `uv sync`, icon generation, and
-`pyinstaller` inside a Windows PowerShell session. Output: `dist/cc-notify.exe`.
-
-**Build and immediately launch:**
-
-```bash
-bash scripts/build-windows.sh --launch
-```
-
-**Run the full pre-push checklist from WSL2:**
-
-```bash
-bash scripts/pre-push-check.sh
-```
-
-This single command builds the EXE, launches it, waits for the webhook
-server to be ready, fires test payloads for every notification type,
-and verifies the working tree is clean. Watch the Windows Notification
-Center — three distinct toasts should appear during the run.
-
----
+To try a build without touching your real setup, set `CC_NOTIFY_DATA_DIR` to a
+scratch folder before launching: config, state and logs go there and hooks are
+written to a fake home instead of the real Claude Code settings.
 
 ### Publish a release
 
 ```bash
-git tag v1.2.0
-git push origin v1.2.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
-GitHub Actions builds the EXE and creates a GitHub Release automatically.
-See [.github/workflows/release.yml](.github/workflows/release.yml).
+GitHub Actions tests, publishes and creates the release
+([release.yml](.github/workflows/release.yml)).
 
 ---
 
@@ -284,46 +190,23 @@ See [.github/workflows/release.yml](.github/workflows/release.yml).
 ```
 cc-notify/
 ├── src/
-│   ├── main.py          # entry point — wires server + tray
-│   ├── server.py        # Flask webhook receiver
-│   ├── notifier.py      # win11toast wrapper
-│   ├── tray.py          # pystray system tray + "Setup Hooks" menu action
-│   ├── hooks_setup.py   # auto-detect + configure Windows/WSL2 Claude Code hooks
-│   └── config.py        # %APPDATA% config persistence
-├── scripts/
-│   ├── setup-hooks.ps1      # Windows: configure Claude Code hooks
-│   ├── setup-hooks.sh       # WSL2: configure Claude Code hooks
-│   ├── build-windows.sh     # WSL2: build the Windows EXE via PowerShell interop
-│   ├── pre-push-check.sh    # WSL2: full pre-push build + smoke-test in one command
-│   └── create_icon.py       # generate assets/icon.ico via Pillow
-├── examples/
-│   ├── settings-snippet.json   # drop this into ~/.claude/settings.json
-│   └── config-example.json     # annotated cc-notify config template
-├── docs/
-│   ├── requirements.md          # functional + non-functional requirements
-│   ├── claude-code-hooks.md     # full hooks event reference
-│   ├── windows-notifications.md # Windows toast capabilities + limits
-│   └── distribution.md          # build, release, and code-signing guide
-├── .github/workflows/
-│   └── release.yml      # CI: build EXE and publish GitHub Release on tag
-├── build.spec           # PyInstaller configuration
-└── pyproject.toml       # project metadata + dependency declarations
+│   ├── CcNotify.Core/        # UI-free logic, unit-tested
+│   │   ├── Notifications/    # hook event → router → NotificationService, messages
+│   │   ├── Server/           # loopback webhook server (token-authenticated)
+│   │   ├── Displays/         # monitor enumeration + selection policy
+│   │   ├── VsCode/           # find/focus VS Code, vscode:// URIs, WSL helper
+│   │   ├── Hooks/            # install hooks into Windows / WSL2 Claude Code settings
+│   │   ├── Autostart/        # start with Windows (HKCU Run + StartupApproved)
+│   │   ├── Updates/          # GitHub release self-update
+│   │   └── Settings/         # config.json / state.json
+│   └── CcNotify.App/         # WinUI 3 shell: tray, popups, settings window, composition root
+├── tests/CcNotify.Core.Tests/
+├── scripts/                  # build, pre-push check, manual hook setup
+├── docs/                     # architecture, hooks reference, distribution
+└── .github/workflows/release.yml
 ```
 
----
-
-## Dependencies
-
-All dependencies are declared in `pyproject.toml` and managed by [uv](https://docs.astral.sh/uv/).
-
-| Package | Group | Purpose |
-|---|---|---|
-| `win11toast` | runtime | WinRT-based Windows toast notifications |
-| `flask` | runtime | Lightweight webhook HTTP server |
-| `waitress` | runtime | Production WSGI server (replaces Flask dev server) |
-| `pystray` | runtime | System tray icon |
-| `pillow` | runtime | Icon image generation |
-| `pyinstaller` | dev | Packages the app into a standalone Windows EXE |
+See [docs/architecture.md](docs/architecture.md) for the design.
 
 ---
 
@@ -332,10 +215,9 @@ All dependencies are declared in `pyproject.toml` and managed by [uv](https://do
 **No notifications appear**
 
 - Confirm cc-notify is running (purple bell in system tray).
-- Check Windows Settings → System → Notifications → ensure notifications are
-  not globally disabled.
-- Do NOT run cc-notify as Administrator — Windows blocks notifications from
-  elevated processes.
+- Check `%APPDATA%\cc-notify\cc-notify.log`.
+- Hooks carry a secret token; if you deleted `state.json`, run *Set up Claude Code
+  hooks…* again so Claude Code gets the new token.
 - Verify the hook URL is correct: `curl http://localhost:9876/health` should
   return `{"status":"ok"}`.
 
@@ -367,7 +249,8 @@ this happens and what it means.
 |---|---|
 | [docs/requirements.md](docs/requirements.md) | Functional and non-functional requirements |
 | [docs/claude-code-hooks.md](docs/claude-code-hooks.md) | Claude Code hook event reference |
-| [docs/windows-notifications.md](docs/windows-notifications.md) | Windows toast capabilities and limits |
+| [docs/architecture.md](docs/architecture.md) | Layers, design decisions, how to extend |
+| [docs/windows-notifications.md](docs/windows-notifications.md) | Background: Windows toast capabilities and limits |
 | [docs/distribution.md](docs/distribution.md) | Build, release, and code-signing guide |
 
 ---

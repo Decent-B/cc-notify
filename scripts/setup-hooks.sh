@@ -143,7 +143,7 @@ else:
 hook_entry = {"type": "http", "url": webhook_url, "async": True}
 hook_group = {"hooks": [hook_entry]}
 
-target_events = ["Notification", "Stop", "PermissionRequest"]
+target_events = ["Notification", "Stop", "StopFailure"]
 if "hooks" not in settings:
     settings["hooks"] = {}
 

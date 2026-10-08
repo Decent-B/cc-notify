@@ -1,33 +1,16 @@
-# Python bytecode
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-.eggs/
-*.spec.bak
-
-# PyInstaller output — dist/ and build/ are regenerated; build.spec is tracked
+# .NET build output
+bin/
+obj/
+publish/
 dist/
-build/
-*.manifest
-
-# uv / pip virtual environments
-.venv/
-venv/
-env/
-
-# Generated icon — rebuilt before each PyInstaller run by scripts/create_icon.py
-assets/icon.ico
+*.user
+.vs/
 
 # IDE
 .vscode/
 .idea/
 *.suo
 
-# macOS
+# OS
 .DS_Store
-
-# Windows
 Thumbs.db

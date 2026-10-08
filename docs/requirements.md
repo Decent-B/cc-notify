@@ -1,5 +1,7 @@
 # cc-notify — Requirements
 
+> **Note (v0.2):** implementation moved to C# / WinUI 3; notifications are cc-notify-drawn popups (not Windows toasts), the server binds to `127.0.0.1` only, and hooks carry a `?token=` secret. See [architecture.md](architecture.md).
+
 ## Overview
 
 **cc-notify** is a lightweight Windows background application that listens for

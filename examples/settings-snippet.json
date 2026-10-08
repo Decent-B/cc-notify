@@ -1,6 +1,6 @@
 {
   "_comment": "Add the 'hooks' block below to your ~/.claude/settings.json (or run scripts/setup-hooks.ps1 / scripts/setup-hooks.sh to do it automatically).",
-  "_comment_wsl2": "WSL2 users: replace 'localhost' with your Windows host IP — run: awk '/^nameserver/{print $2}' /etc/resolv.conf",
+  "_comment_wsl2": "WSL2 users: 'localhost' works with WSL's default localhost forwarding; if you disabled it use your Windows host IP: awk '/^nameserver/{print $2}' /etc/resolv.conf",
 
   "hooks": {
     "Notification": [
@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "http",
-            "url": "http://localhost:9876/webhook",
+            "url": "http://localhost:9876/webhook?token=<webhook_token from %APPDATA%\\cc-notify\\state.json>",
             "async": true
           }
         ]
@@ -21,19 +21,19 @@
         "hooks": [
           {
             "type": "http",
-            "url": "http://localhost:9876/webhook",
+            "url": "http://localhost:9876/webhook?token=<webhook_token from %APPDATA%\\cc-notify\\state.json>",
             "async": true
           }
         ]
       }
     ],
-    "PermissionRequest": [
+    "StopFailure": [
       {
-        "_comment": "Fires when Claude Code would show a permission dialog; includes tool name and input",
+        "_comment": "Fires when the turn ends because of an API error (rate limit, auth, server error, ...)",
         "hooks": [
           {
             "type": "http",
-            "url": "http://localhost:9876/webhook",
+            "url": "http://localhost:9876/webhook?token=<webhook_token from %APPDATA%\\cc-notify\\state.json>",
             "async": true
           }
         ]

@@ -94,13 +94,14 @@ $hookGroup = [ordered]@{
 }
 
 # We register three event types:
-#   Notification   — permission_prompt, idle_prompt, and other status events
-#   Stop           — Claude finished generating a response
-#   PermissionRequest — provides tool-level detail before the permission dialog
+#   Notification — permission_prompt, idle_prompt, and other status events
+#   Stop         — Claude finished generating a response
+#   StopFailure  — the turn ended because of an API error
+# (PermissionRequest is not used: it duplicates Notification[permission_prompt].)
 $newHooks = [ordered]@{
-    Notification      = @($hookGroup)
-    Stop              = @($hookGroup)
-    PermissionRequest = @($hookGroup)
+    Notification = @($hookGroup)
+    Stop         = @($hookGroup)
+    StopFailure  = @($hookGroup)
 }
 
 # ── Merge into existing settings ──────────────────────────────────────────────
@@ -126,7 +127,7 @@ Write-Host "    $SettingsPath"
 Write-Host ""
 # Redact the token from terminal output — it is stored in settings.json already.
 Write-Host "    Webhook URL : http://localhost:$Port/webhook?token=<redacted>"
-Write-Host "    Events      : Notification, Stop, PermissionRequest"
+Write-Host "    Events      : Notification, Stop, StopFailure"
 Write-Host ""
 Write-Host "    Restart Claude Code for changes to take effect."
 

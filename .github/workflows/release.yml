@@ -21,27 +21,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # ── uv setup (manages both Python and the virtual environment) ──────────
-      - name: Install uv
-        # Pin to the full semver tag — astral-sh/setup-uv has not yet published
-        # a floating v8 major-version tag (only v8.0.0 / v8.1.0 / v8.2.0 exist).
-        uses: astral-sh/setup-uv@v8.2.0
+      # ── .NET SDK ────────────────────────────────────────────────────────────
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
         with:
-          python-version: "3.11"
-          enable-cache: true
+          dotnet-version: "8.0.x"
 
-      # --no-install-project: cc-notify is a PyInstaller app, not a pip package.
-      # Install only the declared dependencies; never try to build the project itself.
-      - name: Install dependencies
-        run: uv sync --group dev --no-install-project
-
-      # ── Generate icon ───────────────────────────────────────────────────────
-      - name: Generate icon.ico
-        run: uv run python scripts/create_icon.py
+      # ── Test ────────────────────────────────────────────────────────────────
+      - name: Run tests
+        run: dotnet test tests/CcNotify.Core.Tests --nologo
 
       # ── Build ───────────────────────────────────────────────────────────────
-      - name: Build executable with PyInstaller
-        run: uv run pyinstaller build.spec
+      # Version comes from the tag so the self-updater can compare it with GitHub releases.
+      - name: Publish single-file executable
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          dotnet publish src/CcNotify.App -c Release -p:Platform=x64 -p:Version=$version -o dist --nologo
 
       # ── Rename artifact with version ────────────────────────────────────────
       - name: Rename artifact
@@ -50,6 +46,9 @@ jobs:
           $tag     = "${{ github.ref_name }}"   # e.g. v0.2.0
           $version = $tag.TrimStart("v")         # e.g. 0.2.0
           Rename-Item "dist\cc-notify.exe" "cc-notify-$version-windows-x64.exe"
+          # Stable name: releases up to 0.1.x only self-update from an asset named exactly
+          # "cc-notify.exe", so attach a copy under that name (also a permanent download link).
+          Copy-Item "dist\cc-notify-$version-windows-x64.exe" "dist\cc-notify.exe"
           echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # ── Checksum ─────────────────────────────────────────────────────────────
@@ -69,6 +68,7 @@ jobs:
           name: cc-notify-${{ env.VERSION }}-windows-x64
           path: |
             dist/cc-notify-${{ env.VERSION }}-windows-x64.exe
+            dist/cc-notify.exe
             dist/SHA256SUMS.txt
 
       # ── Create GitHub Release ────────────────────────────────────────────────
@@ -91,7 +91,7 @@ jobs:
 
             **Option A — tray icon (recommended)**
 
-            Right-click the purple bell in your system tray and choose **"Setup Claude Code Hooks…"**:
+            Hooks are configured automatically on first launch. To redo it, right-click the purple bell in your system tray and choose **"Set up Claude Code hooks…"**:
 
             ![cc-notify tray menu](https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/assets/tray-menu.png)
 
@@ -118,6 +118,7 @@ jobs:
             See `SHA256SUMS.txt` attached below.
           files: |
             dist/cc-notify-${{ env.VERSION }}-windows-x64.exe
+            dist/cc-notify.exe
             dist/SHA256SUMS.txt
           fail_on_unmatched_files: true
           draft: false

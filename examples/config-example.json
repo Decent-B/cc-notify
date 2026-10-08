@@ -1,13 +1,16 @@
 {
-  "_comment": "Optional: place this file at %APPDATA%\\cc-notify\\config.json to customise behaviour.",
+  "_comment": "Optional: %APPDATA%\\cc-notify\\config.json. Everything except the port can also be changed in the Settings window.",
 
   "port": 9876,
 
   "sound_enabled": true,
 
   "notify_on_stop": true,
-
+  "notify_on_stop_failure": true,
   "notify_on_permission": true,
+  "notify_on_idle": true,
 
-  "notify_on_idle": true
+  "_comment_monitor": "follow_vs_code | follow_cursor | primary | specific (then set monitor_device_name, e.g. \\\\.\\DISPLAY2)",
+  "monitor": "follow_vs_code",
+  "monitor_device_name": null
 }
